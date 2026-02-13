@@ -1,0 +1,210 @@
+{
+  "design_system": {
+    "identity": {
+      "name": "Expo Intel - Tactical Command",
+      "archetype": "The Performance Pro",
+      "core_values": ["Precision", "Clarity", "Efficiency"],
+      "mood": "Dark, Professional, Data-Rich, High-Contrast"
+    },
+    "colors": {
+      "palette": {
+        "primary": {
+          "DEFAULT": "#3B82F6",
+          "foreground": "#FFFFFF",
+          "hover": "#2563EB"
+        },
+        "background": {
+          "DEFAULT": "#0F172A",
+          "secondary": "#1E293B",
+          "tertiary": "#334155"
+        },
+        "foreground": {
+          "DEFAULT": "#F8FAFC",
+          "muted": "#94A3B8",
+          "inverse": "#0F172A"
+        },
+        "border": {
+          "DEFAULT": "rgba(255, 255, 255, 0.1)",
+          "active": "rgba(59, 130, 246, 0.5)"
+        },
+        "status": {
+          "success": "#10B981",
+          "warning": "#F59E0B",
+          "error": "#EF4444",
+          "info": "#3B82F6"
+        }
+      },
+      "gradients": {
+        "hero": ["#0F172A", "#1E293B"],
+        "card_active": ["rgba(59, 130, 246, 0.1)", "rgba(59, 130, 246, 0.0)"]
+      }
+    },
+    "typography": {
+      "font_family": {
+        "headings": "System",
+        "body": "System",
+        "mono": "System"
+      },
+      "sizes": {
+        "xs": 12,
+        "sm": 14,
+        "base": 16,
+        "lg": 18,
+        "xl": 20,
+        "2xl": 24,
+        "3xl": 30,
+        "4xl": 36
+      },
+      "weights": {
+        "light": "300",
+        "regular": "400",
+        "medium": "500",
+        "semibold": "600",
+        "bold": "700"
+      },
+      "tracking": {
+        "tighter": -0.8,
+        "tight": -0.4,
+        "normal": 0,
+        "wide": 0.5
+      }
+    },
+    "spacing": {
+      "0": 0,
+      "1": 4,
+      "2": 8,
+      "3": 12,
+      "4": 16,
+      "5": 20,
+      "6": 24,
+      "8": 32,
+      "10": 40,
+      "12": 48,
+      "16": 64,
+      "20": 80
+    },
+    "layout": {
+      "container_padding": 16,
+      "card_radius": 8,
+      "button_radius": 6,
+      "input_height": 48
+    },
+    "shadows": {
+      "sm": {
+        "shadowColor": "#000",
+        "shadowOffset": { "width": 0, "height": 1 },
+        "shadowOpacity": 0.18,
+        "shadowRadius": 1.0,
+        "elevation": 1
+      },
+      "md": {
+        "shadowColor": "#000",
+        "shadowOffset": { "width": 0, "height": 2 },
+        "shadowOpacity": 0.25,
+        "shadowRadius": 3.84,
+        "elevation": 5
+      }
+    }
+  },
+  "components": {
+    "Card": {
+      "style": {
+        "backgroundColor": "#1E293B",
+        "borderRadius": 8,
+        "borderWidth": 1,
+        "borderColor": "rgba(255, 255, 255, 0.1)",
+        "padding": 16,
+        "marginBottom": 12
+      },
+      "description": "Standard data container. Dark slate background, subtle border. No heavy shadows."
+    },
+    "Button": {
+      "primary": {
+        "backgroundColor": "#3B82F6",
+        "borderRadius": 6,
+        "paddingVertical": 12,
+        "paddingHorizontal": 24,
+        "alignItems": "center",
+        "justifyContent": "center"
+      },
+      "text_style": {
+        "color": "#FFFFFF",
+        "fontWeight": "600",
+        "fontSize": 16
+      }
+    },
+    "Badge": {
+      "style": {
+        "paddingHorizontal": 8,
+        "paddingVertical": 4,
+        "borderRadius": 4,
+        "backgroundColor": "rgba(59, 130, 246, 0.2)",
+        "alignSelf": "flex-start"
+      },
+      "text_style": {
+        "color": "#60A5FA",
+        "fontSize": 12,
+        "fontWeight": "500"
+      }
+    },
+    "TimelineItem": {
+      "structure": "Row with vertical line on left, dot indicator, and content card on right.",
+      "connector_color": "#334155",
+      "dot_active_color": "#3B82F6"
+    }
+  },
+  "assets": {
+    "images": {
+      "expo_hero": [
+        "https://images.unsplash.com/photo-1760001551764-14eddf965019?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjB0cmFkZSUyMHNob3clMjBleGhpYml0aW9uJTIwaGFsbCUyMGNyb3dkfGVufDB8fHx8MTc3MTAxMjgyM3ww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1764771759049-7cc40156026e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjB0cmFkZSUyMHNob3clMjBleGhpYml0aW9uJTIwaGFsbCUyMGNyb3dkfGVufDB8fHx8MTc3MTAxMjgyM3ww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1643915599026-863e53961a9d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjB0cmFkZSUyMHNob3clMjBleGhpYml0aW9uJTIwaGFsbCUyMGNyb3dkfGVufDB8fHx8MTc3MTAxMjgyM3ww&ixlib=rb-4.1.0&q=85"
+      ],
+      "exhibitor_logos": [
+        "https://images.unsplash.com/photo-1760037028636-6f42428aeeee?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwzfHxtaW5pbWFsaXN0JTIwdGVjaCUyMGxvZ28lMjBkZXNpZ258ZW58MHx8fHwxNzcxMDEyODMzfDA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1760037034697-eee0b07ae072?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwdGVjaCUyMGxvZ28lMjBkZXNpZ258ZW58MHx8fHwxNzcxMDEyODMzfDA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1762087577399-edc6c182f601?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHw0fHxtaW5pbWFsaXN0JTIwdGVjaCUyMGxvZ28lMjBkZXNpZ258ZW58MHx8fHwxNzcxMDEyODMzfDA&ixlib=rb-4.1.0&q=85"
+      ],
+      "user_avatars": [
+        "https://images.unsplash.com/photo-1758518731468-98e90ffd7430?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBidXNpbmVzcyUyMHBvcnRyYWl0JTIwZGl2ZXJzZXxlbnwwfHx8fDE3NzEwMTI4MjR8MA&ixlib=rb-4.1.0&q=85",
+        "https://images.pexels.com/photos/30004357/pexels-photo-30004357.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "https://images.pexels.com/photos/33871730/pexels-photo-33871730.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      ],
+      "products": [
+        "https://images.unsplash.com/photo-1768323275769-6615e7cfcbe4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2ODl8MHwxfHNlYXJjaHwyfHxpbmR1c3RyaWFsJTIwcm9ib3QlMjBhcm0lMjBtb2Rlcm58ZW58MHx8fHwxNzcxMDEyODM0fDA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1691435828932-911a7801adfb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHw0fHxzZXJ2ZXIlMjByb29tJTIwYmx1ZSUyMGxpZ2h0fGVufDB8fHx8MTc3MDk3ODQ0NXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1680992046626-418f7e910589?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwzfHxzZXJ2ZXIlMjByb29tJTIwYmx1ZSUyMGxpZ2h0fGVufDB8fHx8MTc3MDk3ODQ0NXww&ixlib=rb-4.1.0&q=85"
+      ]
+    },
+    "icons": "Use @expo/vector-icons (Feather or Ionicons) for maximum compatibility. Avoid emojis."
+  },
+  "instructions_to_main_agent": {
+    "principles": [
+      "CRITICAL: NativeWind is NOT installed. You MUST use 'StyleSheet.create' or inline styles using the tokens above.",
+      "DO NOT use 'className' props.",
+      "Use 'SafeAreaView' from 'react-native-safe-area-context' for all screens.",
+      "Ensure all touchable targets are at least 44x44 points.",
+      "Use 'expo-blur' for the Tab Bar background and Header background if needed.",
+      "For lists, use 'FlashList' (if available) or optimized 'FlatList'.",
+      "Inputs: Use 'TextInput' with 'placeholderTextColor' set to muted foreground (#94A3B8).",
+      "Modals: Use React Native 'Modal' or conditional rendering with absolute positioning for custom bottom sheets."
+    ],
+    "screen_guidelines": {
+      "home": "Use a Sticky Header for the search bar. Horizontal ScrollView for filters (Chips). FlatList for Exhibitor cards.",
+      "exhibitor_profile": "Hero image top (parallax if possible). Tabbed view for 'About', 'Products', 'People'.",
+      "shortlists": "Draggable list (if libraries allow) or simple 'Up/Down' actions. Clean list items.",
+      "expo_day": "Vertical Line on the left. Time slots as nodes. Meeting cards to the right. 'Current Time' indicator line.",
+      "admin": "Simple form layouts. Use 'DocumentPicker' for CSV upload."
+    },
+    "testing": {
+      "attributes": "Add 'testID' (not data-testid) to all interactive elements."
+    }
+  },
+  "universal_guidelines": [
+    "Dark Mode is the default and only mode.",
+    "No gradients on text.",
+    "Avoid centering text unless it's a specific empty state or success message.",
+    "Use 2x padding inside cards (e.g., 16px or 24px) to avoid cramped text.",
+    "Contrast is King: Ensure text is readable against the slate background."
+  ]
+}
