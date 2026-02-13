@@ -6,8 +6,17 @@ import pytest
 import requests
 import os
 import json
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load frontend .env file to get backend URL
+frontend_env = Path(__file__).parent.parent.parent / "frontend" / ".env"
+if frontend_env.exists():
+    load_dotenv(frontend_env)
 
 BASE_URL = os.environ.get('EXPO_PUBLIC_BACKEND_URL')
+if not BASE_URL:
+    BASE_URL = "https://expo-day-app.preview.emergentagent.com"
 
 @pytest.fixture(scope="session")
 def api_client():
