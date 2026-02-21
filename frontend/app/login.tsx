@@ -36,8 +36,8 @@ export default function LoginScreen() {
             <View style={s.iconWrap}>
               <Feather name="compass" size={32} color={colors.primary} />
             </View>
-            <Text style={s.title}>Expo Intel</Text>
-            <Text style={s.subtitle}>Sign in to manage your expo experience</Text>
+            <Text style={s.title}>ExpoIntel</Text>
+            <Text style={s.subtitle}>B2B Expo Prospecting Dashboard</Text>
           </View>
 
           {error ? <View style={s.errorBox}><Feather name="alert-circle" size={16} color={colors.error} /><Text style={s.errorText}>{error}</Text></View> : null}
