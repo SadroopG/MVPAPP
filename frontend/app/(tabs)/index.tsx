@@ -1,250 +1,167 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, ScrollView, Modal, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, ScrollView, Modal, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { api } from '../../src/api';
-import { colors, fontSize, spacing, layout } from '../../src/theme';
 
-function formatRevenue(r: number) {
-  if (r >= 1e9) return `$${(r / 1e9).toFixed(1)}B`;
-  if (r >= 1e6) return `$${(r / 1e6).toFixed(0)}M`;
-  if (r >= 1e3) return `$${(r / 1e3).toFixed(0)}K`;
-  return `$${r}`;
-}
+const C = { bg: '#0f172a', card: '#1e293b', card2: '#334155', border: 'rgba(255,255,255,0.08)', blue: '#3b82f6', blueDim: 'rgba(59,130,246,0.15)',
+  fg: '#f8fafc', muted: '#94a3b8', dim: '#64748b', success: '#10b981', warn: '#f59e0b', err: '#ef4444' };
+
+const REGION_COLORS: Record<string,string> = { 'Europe': '#818cf8', 'North America': '#34d399', 'Middle East': '#fbbf24' };
 
 export default function HomeScreen() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const [expos, setExpos] = useState<any[]>([]);
-  const [selectedExpo, setSelectedExpo] = useState<string>('');
-  const [exhibitors, setExhibitors] = useState<any[]>([]);
-  const [filterOptions, setFilterOptions] = useState<any>({ hqs: [], industries: [], solutions: [] });
-  const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
-  const [activeHQ, setActiveHQ] = useState('');
-  const [activeIndustry, setActiveIndustry] = useState('');
-  const [minRevenue, setMinRevenue] = useState(false);
-  const [showExpoModal, setShowExpoModal] = useState(false);
-  const [shortlistModal, setShortlistModal] = useState<string | null>(null);
-  const [shortlists, setShortlists] = useState<any[]>([]);
-  const [newSLName, setNewSLName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState<any>({ regions: [], industries: [] });
+  const [selRegion, setSelRegion] = useState('');
+  const [selIndustries, setSelIndustries] = useState<string[]>([]);
+  const [showFilter, setShowFilter] = useState(false);
 
-  useEffect(() => {
-    api.getExpos().then(setExpos).catch(() => {});
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
-  useEffect(() => {
-    if (selectedExpo) {
-      loadExhibitors();
-      api.getFilterOptions(selectedExpo).then(setFilterOptions).catch(() => {});
-    }
-  }, [selectedExpo]);
-
-  const loadExhibitors = useCallback(async () => {
+  const loadData = async () => {
     setLoading(true);
     try {
-      const params: Record<string, string> = {};
-      if (selectedExpo) params.expo_id = selectedExpo;
-      if (search) params.search = search;
-      if (activeHQ) params.hq = activeHQ;
-      if (activeIndustry) params.industry = activeIndustry;
-      if (minRevenue) params.min_revenue = '50000000';
-      const data = await api.getExhibitors(params);
-      setExhibitors(data);
+      const [ex, f] = await Promise.all([api.getExpos(), api.getExpoFilters()]);
+      setExpos(ex);
+      setFilters(f);
     } catch { }
     setLoading(false);
-  }, [selectedExpo, search, activeHQ, activeIndustry, minRevenue]);
-
-  useEffect(() => { if (selectedExpo) loadExhibitors(); }, [loadExhibitors]);
-
-  const openShortlistModal = async (exhibitorId: string) => {
-    setShortlistModal(exhibitorId);
-    try { const sl = await api.getShortlists(); setShortlists(sl); } catch { }
   };
 
-  const addToSL = async (slId: string) => {
-    if (!shortlistModal) return;
-    try {
-      await api.addToShortlist(slId, shortlistModal);
-      Alert.alert('Added', 'Exhibitor added to shortlist');
-      setShortlistModal(null);
-    } catch (e: any) { Alert.alert('Error', e.message); }
+  useEffect(() => {
+    const params: Record<string,string> = {};
+    if (selRegion) params.region = selRegion;
+    if (selIndustries.length === 1) params.industry = selIndustries[0];
+    api.getExpos(params).then(setExpos).catch(() => {});
+  }, [selRegion, selIndustries]);
+
+  const numCols = width > 900 ? 3 : width > 600 ? 2 : 1;
+  const cardWidth = (width - 48 - (numCols - 1) * 12) / numCols;
+
+  const filtered = selIndustries.length > 1
+    ? expos.filter(e => selIndustries.some(i => e.industry?.toLowerCase().includes(i.toLowerCase())))
+    : expos;
+
+  const toggleIndustry = (ind: string) => {
+    setSelIndustries(prev => prev.includes(ind) ? prev.filter(i => i !== ind) : [...prev, ind]);
   };
 
-  const createAndAdd = async () => {
-    if (!newSLName || !shortlistModal || !selectedExpo) return;
-    try {
-      const sl = await api.createShortlist(selectedExpo, newSLName);
-      await api.addToShortlist(sl.id, shortlistModal);
-      Alert.alert('Created', `Added to "${newSLName}"`);
-      setShortlistModal(null);
-      setNewSLName('');
-    } catch (e: any) { Alert.alert('Error', e.message); }
-  };
-
-  const selectedExpoName = expos.find(e => e.id === selectedExpo)?.name || 'Select Expo';
-
-  const renderExhibitor = ({ item }: { item: any }) => (
-    <View style={s.card} testID={`exhibitor-card-${item.id}`}>
-      <View style={s.cardHeader}>
-        <View style={s.logoCircle}>
-          <Text style={s.logoText}>{(item.company || '?')[0]}</Text>
-        </View>
-        <View style={s.cardInfo}>
-          <Text style={s.cardTitle} numberOfLines={1}>{item.company}</Text>
+  const renderExpo = ({ item }: { item: any }) => {
+    const regionColor = REGION_COLORS[item.region] || C.blue;
+    return (
+      <TouchableOpacity testID={`expo-card-${item.id}`} style={[s.expoCard, { width: numCols === 1 ? '100%' : cardWidth }]}
+        onPress={() => router.push(`/expo/${item.id}`)}>
+        <View style={[s.cardAccent, { backgroundColor: regionColor }]} />
+        <View style={s.cardBody}>
+          <View style={s.cardTop}>
+            <View style={[s.regionBadge, { backgroundColor: regionColor + '22' }]}>
+              <Text style={[s.regionText, { color: regionColor }]}>{item.region}</Text>
+            </View>
+            <Text style={s.dateText}>{item.date}</Text>
+          </View>
+          <Text style={s.expoName}>{item.name}</Text>
           <View style={s.cardMeta}>
-            <Feather name="map-pin" size={12} color={colors.fgMuted} />
-            <Text style={s.metaText}>{item.hq}</Text>
+            <View style={s.metaItem}>
+              <Feather name="briefcase" size={13} color={C.dim} />
+              <Text style={s.metaText}>{item.industry}</Text>
+            </View>
+          </View>
+          <View style={s.cardFooter}>
+            <View style={s.companiesCount}>
+              <Feather name="building" size={13} color={C.blue} />
+              <Text style={s.companiesText}>{item.company_count || 0} companies</Text>
+            </View>
+            <Feather name="arrow-right" size={16} color={C.dim} />
           </View>
         </View>
-      </View>
-      <View style={s.cardStats}>
-        <View style={s.stat}>
-          <Text style={s.statLabel}>Revenue</Text>
-          <Text style={s.statValue}>{formatRevenue(item.revenue)}</Text>
-        </View>
-        <View style={s.stat}>
-          <Text style={s.statLabel}>Team</Text>
-          <Text style={s.statValue}>{item.team_size?.toLocaleString()}</Text>
-        </View>
-        <View style={s.stat}>
-          <Text style={s.statLabel}>Booth</Text>
-          <Text style={s.statValue}>{item.booth}</Text>
-        </View>
-      </View>
-      {item.solutions?.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipsRow}>
-          {item.solutions.map((sol: string, i: number) => (
-            <View key={i} style={s.chip}><Text style={s.chipText}>{sol}</Text></View>
-          ))}
-        </ScrollView>
-      )}
-      <View style={s.cardActions}>
-        <TouchableOpacity testID={`shortlist-btn-${item.id}`} style={s.actionBtn} onPress={() => openShortlistModal(item.id)}>
-          <Feather name="bookmark" size={16} color={colors.primary} />
-          <Text style={s.actionText}>Shortlist</Text>
-        </TouchableOpacity>
-        <TouchableOpacity testID={`profile-btn-${item.id}`} style={[s.actionBtn, s.actionPrimary]} onPress={() => router.push(`/exhibitor/${item.id}`)}>
-          <Feather name="arrow-right" size={16} color="#fff" />
-          <Text style={[s.actionText, { color: '#fff' }]}>Profile</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.topBar}>
+      {/* Header */}
+      <View style={s.header}>
         <View>
-          <Text style={s.greeting}>Welcome back,</Text>
-          <Text style={s.userName}>{user?.name || 'User'}</Text>
+          <Text style={s.greeting}>Hello {user?.name?.split(' ')[0] || 'there'},</Text>
+          <Text style={s.heroText}>Which expo would you like to plan for?</Text>
         </View>
-        <TouchableOpacity testID="logout-btn" onPress={logout} style={s.logoutBtn}>
-          <Feather name="log-out" size={20} color={colors.fgMuted} />
+        <TouchableOpacity testID="logout-btn" onPress={logout} style={s.avatarBtn}>
+          <Text style={s.avatarText}>{(user?.name || 'U')[0]}</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Expo Selector */}
-      <TouchableOpacity testID="expo-selector-btn" style={s.selector} onPress={() => setShowExpoModal(true)}>
-        <Feather name="compass" size={18} color={colors.primary} />
-        <Text style={s.selectorText} numberOfLines={1}>{selectedExpoName}</Text>
-        <Feather name="chevron-down" size={18} color={colors.fgMuted} />
-      </TouchableOpacity>
-
-      {selectedExpo ? (
-        <>
-          {/* Search */}
-          <View style={s.searchWrap}>
-            <Feather name="search" size={18} color={colors.fgMuted} />
-            <TextInput testID="search-input" style={s.searchInput} value={search} onChangeText={setSearch} placeholder="Search companies..." placeholderTextColor={colors.fgMuted} />
-            {search ? <TouchableOpacity onPress={() => setSearch('')}><Feather name="x" size={18} color={colors.fgMuted} /></TouchableOpacity> : null}
-          </View>
-
-          {/* Filters */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterContent}>
-            <TouchableOpacity testID="filter-revenue" style={[s.filterChip, minRevenue && s.filterActive]} onPress={() => setMinRevenue(!minRevenue)}>
-              <Text style={[s.filterText, minRevenue && s.filterTextActive]}>Revenue &gt;$50M</Text>
+      {/* Filters */}
+      <View style={s.filterBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
+          <TouchableOpacity style={[s.filterChip, !selRegion && !selIndustries.length && s.filterActive]}
+            onPress={() => { setSelRegion(''); setSelIndustries([]); }}>
+            <Text style={[s.filterChipText, !selRegion && !selIndustries.length && s.filterActiveText]}>All</Text>
+          </TouchableOpacity>
+          {filters.regions?.map((r: string) => (
+            <TouchableOpacity key={r} style={[s.filterChip, selRegion === r && s.filterActive]}
+              onPress={() => setSelRegion(selRegion === r ? '' : r)}>
+              <View style={[s.filterDot, { backgroundColor: REGION_COLORS[r] || C.blue }]} />
+              <Text style={[s.filterChipText, selRegion === r && s.filterActiveText]}>{r}</Text>
             </TouchableOpacity>
-            {filterOptions.industries?.slice(0, 6).map((ind: string) => (
-              <TouchableOpacity key={ind} style={[s.filterChip, activeIndustry === ind && s.filterActive]} onPress={() => setActiveIndustry(activeIndustry === ind ? '' : ind)}>
-                <Text style={[s.filterText, activeIndustry === ind && s.filterTextActive]}>{ind}</Text>
-              </TouchableOpacity>
-            ))}
-            {filterOptions.hqs?.slice(0, 4).map((hq: string) => (
-              <TouchableOpacity key={hq} style={[s.filterChip, activeHQ === hq && s.filterActive]} onPress={() => setActiveHQ(activeHQ === hq ? '' : hq)}>
-                <Text style={[s.filterText, activeHQ === hq && s.filterTextActive]}>{hq}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          ))}
+          <TouchableOpacity style={s.filterChip} onPress={() => setShowFilter(true)}>
+            <Feather name="sliders" size={13} color={C.dim} />
+            <Text style={s.filterChipText}>Industry</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
 
-          <View style={s.resultBar}>
-            <Text style={s.resultText}>{exhibitors.length} exhibitor{exhibitors.length !== 1 ? 's' : ''}</Text>
-          </View>
-
-          {loading ? (
-            <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary} size="large" />
-          ) : (
-            <FlatList
-              data={exhibitors}
-              keyExtractor={item => item.id}
-              renderItem={renderExhibitor}
-              contentContainerStyle={s.listContent}
-              showsVerticalScrollIndicator={false}
-              ListEmptyComponent={<View style={s.empty}><Feather name="inbox" size={48} color={colors.bgTertiary} /><Text style={s.emptyText}>No exhibitors found</Text></View>}
-            />
-          )}
-        </>
-      ) : (
-        <View style={s.empty}>
-          <Feather name="compass" size={64} color={colors.bgTertiary} />
-          <Text style={s.emptyText}>Select an expo to browse exhibitors</Text>
+      {/* Active filters */}
+      {selIndustries.length > 0 && (
+        <View style={s.activeFilters}>
+          {selIndustries.map(i => (
+            <TouchableOpacity key={i} style={s.activeChip} onPress={() => toggleIndustry(i)}>
+              <Text style={s.activeChipText}>{i}</Text>
+              <Feather name="x" size={12} color={C.blue} />
+            </TouchableOpacity>
+          ))}
         </View>
       )}
 
-      {/* Expo Modal */}
-      <Modal visible={showExpoModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Select Expo</Text>
-              <TouchableOpacity onPress={() => setShowExpoModal(false)}><Feather name="x" size={24} color={colors.fg} /></TouchableOpacity>
-            </View>
-            {expos.map(expo => (
-              <TouchableOpacity key={expo.id} testID={`expo-option-${expo.id}`} style={[s.expoItem, selectedExpo === expo.id && s.expoItemActive]}
-                onPress={() => { setSelectedExpo(expo.id); setShowExpoModal(false); }}>
-                <View>
-                  <Text style={s.expoName}>{expo.name}</Text>
-                  <Text style={s.expoMeta}>{expo.date} - {expo.location}</Text>
-                </View>
-                {selectedExpo === expo.id && <Feather name="check" size={20} color={colors.primary} />}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      </Modal>
+      {/* Results */}
+      <View style={s.resultBar}>
+        <Text style={s.resultText}>{filtered.length} expo{filtered.length !== 1 ? 's' : ''} available</Text>
+      </View>
 
-      {/* Shortlist Modal */}
-      <Modal visible={!!shortlistModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Add to Shortlist</Text>
-              <TouchableOpacity onPress={() => setShortlistModal(null)}><Feather name="x" size={24} color={colors.fg} /></TouchableOpacity>
-            </View>
-            {shortlists.map(sl => (
-              <TouchableOpacity key={sl.id} style={s.expoItem} onPress={() => addToSL(sl.id)}>
-                <Text style={s.expoName}>{sl.name}</Text>
-                <Text style={s.expoMeta}>{sl.exhibitor_ids?.length || 0} items</Text>
+      {loading ? (
+        <ActivityIndicator style={{ marginTop: 60 }} color={C.blue} size="large" />
+      ) : (
+        <FlatList data={filtered} keyExtractor={i => i.id} renderItem={renderExpo}
+          numColumns={numCols} key={`cols-${numCols}`}
+          contentContainerStyle={s.list} columnWrapperStyle={numCols > 1 ? s.row : undefined}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={<View style={s.empty}><Feather name="inbox" size={48} color={C.card2} /><Text style={s.emptyText}>No expos found</Text></View>} />
+      )}
+
+      {/* Industry Filter Modal */}
+      <Modal visible={showFilter} transparent animationType="slide">
+        <View style={s.modalBg}>
+          <View style={s.modalBox}>
+            <View style={s.modalHead}><Text style={s.modalTitle}>Filter by Industry</Text>
+              <TouchableOpacity onPress={() => setShowFilter(false)}><Feather name="x" size={24} color={C.fg} /></TouchableOpacity></View>
+            {filters.industries?.map((ind: string) => (
+              <TouchableOpacity key={ind} style={s.checkRow} onPress={() => toggleIndustry(ind)}>
+                <View style={[s.checkbox, selIndustries.includes(ind) && s.checkboxOn]}>
+                  {selIndustries.includes(ind) && <Feather name="check" size={14} color="#fff" />}
+                </View>
+                <Text style={s.checkLabel}>{ind}</Text>
               </TouchableOpacity>
             ))}
-            <View style={s.newSLRow}>
-              <TextInput style={s.newSLInput} value={newSLName} onChangeText={setNewSLName} placeholder="New shortlist name..." placeholderTextColor={colors.fgMuted} />
-              <TouchableOpacity style={s.newSLBtn} onPress={createAndAdd}>
-                <Feather name="plus" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={s.applyBtn} onPress={() => setShowFilter(false)}>
+              <Text style={s.applyText}>Apply Filters</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -253,54 +170,50 @@ export default function HomeScreen() {
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  greeting: { fontSize: fontSize.sm, color: colors.fgMuted },
-  userName: { fontSize: fontSize.xl, fontWeight: '700', color: colors.fg },
-  logoutBtn: { padding: spacing.sm },
-  selector: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgSecondary, marginHorizontal: spacing.lg, borderRadius: layout.cardRadius, padding: spacing.md, borderWidth: 1, borderColor: colors.border },
-  selectorText: { flex: 1, color: colors.fg, fontSize: fontSize.base, fontWeight: '600', marginLeft: spacing.sm },
-  searchWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgSecondary, marginHorizontal: spacing.lg, marginTop: spacing.md, borderRadius: layout.buttonRadius, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border },
-  searchInput: { flex: 1, height: 40, color: colors.fg, fontSize: fontSize.sm, marginLeft: spacing.sm },
-  filterRow: { maxHeight: 44, marginTop: spacing.md },
-  filterContent: { paddingHorizontal: spacing.lg, gap: spacing.sm },
-  filterChip: { backgroundColor: colors.bgSecondary, borderRadius: 20, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderWidth: 1, borderColor: colors.border, marginRight: spacing.sm },
-  filterActive: { backgroundColor: colors.badgeBg, borderColor: colors.primary },
-  filterText: { color: colors.fgMuted, fontSize: fontSize.xs, fontWeight: '500' },
-  filterTextActive: { color: colors.primary },
-  resultBar: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  resultText: { color: colors.fgMuted, fontSize: fontSize.xs, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
-  listContent: { paddingHorizontal: spacing.lg, paddingBottom: 100 },
-  card: { backgroundColor: colors.bgSecondary, borderRadius: layout.cardRadius, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginBottom: spacing.md },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
-  logoCircle: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.badgeBg, justifyContent: 'center', alignItems: 'center' },
-  logoText: { color: colors.primary, fontSize: fontSize.lg, fontWeight: '700' },
-  cardInfo: { flex: 1, marginLeft: spacing.md },
-  cardTitle: { color: colors.fg, fontSize: fontSize.base, fontWeight: '700' },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  metaText: { color: colors.fgMuted, fontSize: fontSize.xs, marginLeft: 4 },
-  cardStats: { flexDirection: 'row', marginBottom: spacing.md },
-  stat: { flex: 1 },
-  statLabel: { color: colors.fgMuted, fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
-  statValue: { color: colors.fg, fontSize: fontSize.sm, fontWeight: '700', marginTop: 2 },
-  chipsRow: { marginBottom: spacing.md, maxHeight: 28 },
-  chip: { backgroundColor: colors.bgTertiary, borderRadius: 4, paddingHorizontal: spacing.sm, paddingVertical: 2, marginRight: spacing.xs },
-  chipText: { color: colors.fgMuted, fontSize: 10, fontWeight: '500' },
-  cardActions: { flexDirection: 'row', gap: spacing.sm },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.sm, borderRadius: layout.buttonRadius, borderWidth: 1, borderColor: colors.border, gap: 6 },
-  actionPrimary: { backgroundColor: colors.primary, borderColor: colors.primary },
-  actionText: { color: colors.primary, fontSize: fontSize.sm, fontWeight: '600' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 80 },
-  emptyText: { color: colors.fgMuted, fontSize: fontSize.base, marginTop: spacing.lg },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: colors.bgSecondary, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.xxl, maxHeight: '70%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xl },
-  modalTitle: { color: colors.fg, fontSize: fontSize.xl, fontWeight: '700' },
-  expoItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
-  expoItemActive: { backgroundColor: colors.badgeBg, marginHorizontal: -spacing.md, paddingHorizontal: spacing.md, borderRadius: layout.buttonRadius },
-  expoName: { color: colors.fg, fontSize: fontSize.base, fontWeight: '600' },
-  expoMeta: { color: colors.fgMuted, fontSize: fontSize.xs, marginTop: 2 },
-  newSLRow: { flexDirection: 'row', marginTop: spacing.lg, gap: spacing.sm },
-  newSLInput: { flex: 1, backgroundColor: colors.bg, borderRadius: layout.buttonRadius, paddingHorizontal: spacing.md, height: 44, color: colors.fg, borderWidth: 1, borderColor: colors.border },
-  newSLBtn: { width: 44, height: 44, borderRadius: layout.buttonRadius, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
+  safe: { flex: 1, backgroundColor: C.bg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
+  greeting: { fontSize: 14, color: C.muted, fontWeight: '400' },
+  heroText: { fontSize: 22, color: C.fg, fontWeight: '700', marginTop: 4, letterSpacing: -0.5 },
+  avatarBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.card, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: C.border },
+  avatarText: { color: C.blue, fontSize: 16, fontWeight: '700' },
+  filterBar: { paddingBottom: 8 },
+  filterScroll: { paddingHorizontal: 20, gap: 8 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.card, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: C.border },
+  filterActive: { backgroundColor: C.blueDim, borderColor: C.blue + '44' },
+  filterChipText: { color: C.muted, fontSize: 13, fontWeight: '500' },
+  filterActiveText: { color: C.blue },
+  filterDot: { width: 8, height: 8, borderRadius: 4 },
+  activeFilters: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 20, gap: 6, paddingBottom: 8 },
+  activeChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.blueDim, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  activeChipText: { color: C.blue, fontSize: 12, fontWeight: '500' },
+  resultBar: { paddingHorizontal: 20, paddingBottom: 12 },
+  resultText: { color: C.dim, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
+  list: { paddingHorizontal: 20, paddingBottom: 100 },
+  row: { gap: 12 },
+  expoCard: { backgroundColor: C.card, borderRadius: 10, borderWidth: 1, borderColor: C.border, overflow: 'hidden', marginBottom: 12 },
+  cardAccent: { height: 3 },
+  cardBody: { padding: 16 },
+  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  regionBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  regionText: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateText: { color: C.dim, fontSize: 12 },
+  expoName: { color: C.fg, fontSize: 17, fontWeight: '700', marginBottom: 8, letterSpacing: -0.3 },
+  cardMeta: { marginBottom: 12 },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaText: { color: C.dim, fontSize: 13 },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.border, paddingTop: 12 },
+  companiesCount: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  companiesText: { color: C.blue, fontSize: 13, fontWeight: '600' },
+  empty: { alignItems: 'center', paddingTop: 80 },
+  emptyText: { color: C.dim, fontSize: 15, marginTop: 16 },
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  modalBox: { backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, maxHeight: '70%' },
+  modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalTitle: { color: C.fg, fontSize: 18, fontWeight: '700' },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.border },
+  checkbox: { width: 22, height: 22, borderRadius: 4, borderWidth: 2, borderColor: C.dim, justifyContent: 'center', alignItems: 'center' },
+  checkboxOn: { backgroundColor: C.blue, borderColor: C.blue },
+  checkLabel: { color: C.fg, fontSize: 15 },
+  applyBtn: { backgroundColor: C.blue, borderRadius: 8, height: 48, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
+  applyText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });
