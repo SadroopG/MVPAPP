@@ -3,302 +3,225 @@ import { View, Text, TouchableOpacity, StyleSheet, FlatList, ActivityIndicator, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import { api } from '../../src/api';
-import { colors, fontSize, spacing, layout } from '../../src/theme';
 
-const STATUS_COLORS: Record<string, string> = {
-  scheduled: colors.warning,
-  checked_in: colors.success,
-  completed: colors.primary,
-  cancelled: colors.error,
+const C = { bg: '#0f172a', card: '#1e293b', card2: '#334155', border: 'rgba(255,255,255,0.08)', blue: '#3b82f6', blueDim: 'rgba(59,130,246,0.15)',
+  fg: '#f8fafc', muted: '#94a3b8', dim: '#64748b', success: '#10b981', warn: '#f59e0b', err: '#ef4444', purple: '#a78bfa' };
+
+const STATUS_MAP: Record<string, { label: string; color: string; icon: string }> = {
+  planned: { label: 'Planned', color: C.blue, icon: 'clock' },
+  visited: { label: 'Visited', color: C.success, icon: 'check-circle' },
+  followed_up: { label: 'Followed Up', color: C.purple, icon: 'mail' },
 };
 
+const MT_LABELS: Record<string,string> = { booth_visit: 'Booth Visit', scheduled: 'Scheduled', drop_by: 'Drop By' };
+
 export default function ExpoDayScreen() {
+  const [days, setDays] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [expos, setExpos] = useState<any[]>([]);
-  const [selectedExpo, setSelectedExpo] = useState('');
-  const [expoDay, setExpoDay] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [meetingDetail, setMeetingDetail] = useState<any>(null);
+  const [selExpo, setSelExpo] = useState('');
+  const [notesModal, setNotesModal] = useState<any>(null);
   const [notesText, setNotesText] = useState('');
-  const [showExpoModal, setShowExpoModal] = useState(false);
 
-  useFocusEffect(useCallback(() => {
-    api.getExpos().then(setExpos).catch(() => {});
-  }, []));
-
-  const loadExpoDay = async (expoId: string) => {
+  const load = async () => {
     setLoading(true);
     try {
-      const days = await api.getExpoDays(expoId);
-      if (days.length > 0) {
-        setExpoDay(days[0]);
-      } else {
-        const newDay = await api.createExpoDay(expoId);
-        setExpoDay(newDay);
-      }
+      const params: Record<string,string> = {};
+      if (selExpo) params.expo_id = selExpo;
+      const [d, e] = await Promise.all([api.getExpoDays(params), api.getExpos()]);
+      setDays(d);
+      setExpos(e);
     } catch { }
     setLoading(false);
   };
 
-  const selectExpo = (id: string) => {
-    setSelectedExpo(id);
-    setShowExpoModal(false);
-    loadExpoDay(id);
+  useFocusEffect(useCallback(() => { load(); }, [selExpo]));
+
+  const handleCheckin = async (item: any) => {
+    await api.updateExpoDay(item.id, { status: 'visited' });
+    load();
   };
 
-  const handleCheckin = async (meetingId: string) => {
-    if (!expoDay) return;
-    await api.checkinMeeting(expoDay.id, meetingId);
-    loadExpoDay(selectedExpo);
+  const handleFollowUp = async (item: any) => {
+    setNotesModal(item);
+    setNotesText(item.notes || '');
   };
 
-  const handleSaveNotes = async () => {
-    if (!expoDay || !meetingDetail) return;
-    await api.updateMeeting(expoDay.id, meetingDetail.id, { notes: notesText });
-    setMeetingDetail(null);
-    loadExpoDay(selectedExpo);
+  const saveFollowUp = async () => {
+    if (!notesModal) return;
+    await api.updateExpoDay(notesModal.id, { status: 'followed_up', notes: notesText });
+    setNotesModal(null);
+    load();
   };
 
-  const handleUploadCard = async (meetingId: string) => {
-    if (!expoDay) return;
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.5 });
-    if (!result.canceled && result.assets[0].base64) {
-      try {
-        await api.uploadVisitingCard(expoDay.id, meetingId, result.assets[0].base64);
-        Alert.alert('Success', 'Visiting card uploaded');
-        loadExpoDay(selectedExpo);
-      } catch (e: any) { Alert.alert('Error', e.message); }
-    }
-  };
-
-  const handleDeleteMeeting = async (meetingId: string) => {
-    if (!expoDay) return;
-    Alert.alert('Delete Meeting', 'Are you sure?', [
+  const handleDelete = (eid: string) => {
+    Alert.alert('Remove', 'Remove from Expo Day?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        await api.deleteMeeting(expoDay.id, meetingId);
-        loadExpoDay(selectedExpo);
-      }}
+      { text: 'Remove', style: 'destructive', onPress: async () => { await api.deleteExpoDay(eid); load(); } }
     ]);
   };
 
   const handleExport = async () => {
-    if (!expoDay) return;
     try {
-      const res = await api.exportExpoDay(expoDay.id);
-      Alert.alert('Export Ready', `CSV generated for ${res.filename}\nMeetings: ${res.csv_data.split('\n').length - 1}`);
+      const res = await api.exportCSV('expo-days', selExpo);
+      Alert.alert('Export Ready', `${res.filename} generated`);
     } catch (e: any) { Alert.alert('Error', e.message); }
   };
 
-  const meetings = expoDay?.meetings || [];
-  const sorted = [...meetings].sort((a: any, b: any) => (a.time || '').localeCompare(b.time || ''));
-
-  const renderMeeting = ({ item, index }: { item: any; index: number }) => {
-    const ex = item.exhibitor || {};
-    const statusColor = STATUS_COLORS[item.status] || colors.fgMuted;
-    const isCheckedIn = item.checked_in;
-
+  const renderDay = ({ item, index }: { item: any; index: number }) => {
+    const co = item.company || {};
+    const st = STATUS_MAP[item.status] || STATUS_MAP.planned;
+    const isVisited = item.status === 'visited' || item.status === 'followed_up';
     return (
-      <View style={s.timelineRow} testID={`meeting-${item.id}`}>
-        {/* Timeline connector */}
-        <View style={s.timelineLeft}>
-          {index > 0 && <View style={s.lineTop} />}
-          <View style={[s.dot, { backgroundColor: statusColor }]} />
-          {index < sorted.length - 1 && <View style={s.lineBottom} />}
+      <View style={s.timelineRow} testID={`expoday-${item.id}`}>
+        <View style={s.timeCol}>
+          <Text style={s.timeText}>{item.time_slot}</Text>
+          <View style={[s.dot, { backgroundColor: st.color }]} />
+          {index < days.length - 1 && <View style={s.line} />}
         </View>
-
-        {/* Meeting card */}
-        <View style={[s.meetingCard, isCheckedIn && s.meetingCheckedIn]}>
-          <View style={s.meetingHeader}>
-            <View style={s.timeBox}>
-              <Feather name="clock" size={12} color={colors.fgMuted} />
-              <Text style={s.timeText}>{item.time || 'TBD'}</Text>
+        <View style={[s.meetingCard, isVisited && { borderColor: st.color + '33' }]}>
+          <View style={s.meetHead}>
+            <View style={s.meetInfo}>
+              <Text style={s.coName}>{co.name}</Text>
+              <View style={s.meetMeta}>
+                <Feather name="map-pin" size={11} color={C.dim} />
+                <Text style={s.boothText}>{item.booth || co.booth || '—'}</Text>
+                <View style={s.mtBadge}><Text style={s.mtText}>{MT_LABELS[item.meeting_type] || item.meeting_type}</Text></View>
+              </View>
             </View>
-            <View style={[s.statusBadge, { backgroundColor: statusColor + '22' }]}>
-              <Text style={[s.statusText, { color: statusColor }]}>{item.status}</Text>
-            </View>
-          </View>
-
-          <Text style={s.meetingCompany}>{ex.company || 'Unknown'}</Text>
-          <View style={s.meetingMeta}>
-            <View style={s.metaItem}>
-              <Feather name="map-pin" size={12} color={colors.fgMuted} />
-              <Text style={s.metaText}>Booth {ex.booth || '—'}</Text>
+            <View style={[s.statusBadge, { backgroundColor: st.color + '22' }]}>
+              <Feather name={st.icon as any} size={12} color={st.color} />
+              <Text style={[s.statusText, { color: st.color }]}>{st.label}</Text>
             </View>
           </View>
-          {item.agenda ? <Text style={s.agendaText}>{item.agenda}</Text> : null}
-          {item.notes ? <View style={s.notesPreview}><Feather name="file-text" size={12} color={colors.fgMuted} /><Text style={s.notesPreviewText} numberOfLines={2}>{item.notes}</Text></View> : null}
-          {item.voice_transcript ? <View style={s.notesPreview}><Feather name="mic" size={12} color={colors.success} /><Text style={s.notesPreviewText} numberOfLines={2}>Transcript: {item.voice_transcript}</Text></View> : null}
-          {item.action_items ? <View style={s.notesPreview}><Feather name="check-square" size={12} color={colors.primary} /><Text style={s.notesPreviewText} numberOfLines={2}>Actions: {item.action_items}</Text></View> : null}
-
-          {/* Action buttons */}
-          <View style={s.meetingActions}>
-            {!isCheckedIn ? (
-              <TouchableOpacity testID={`checkin-${item.id}`} style={s.checkinBtn} onPress={() => handleCheckin(item.id)}>
-                <Feather name="check-circle" size={14} color="#fff" />
-                <Text style={s.checkinText}>Check In</Text>
+          {item.notes ? <View style={s.notesBox}><Feather name="file-text" size={12} color={C.dim} /><Text style={s.notesText} numberOfLines={2}>{item.notes}</Text></View> : null}
+          <View style={s.meetActions}>
+            {item.status === 'planned' && (
+              <TouchableOpacity testID={`checkin-${item.id}`} style={s.checkinBtn} onPress={() => handleCheckin(item)}>
+                <Feather name="check" size={14} color="#fff" /><Text style={s.checkinText}>Check In</Text>
               </TouchableOpacity>
-            ) : (
-              <>
-                <TouchableOpacity testID={`upload-card-${item.id}`} style={s.miniBtn} onPress={() => handleUploadCard(item.id)}>
-                  <Feather name="camera" size={14} color={colors.primary} />
-                  <Text style={s.miniBtnText}>Card</Text>
-                </TouchableOpacity>
-                <TouchableOpacity testID={`notes-${item.id}`} style={s.miniBtn} onPress={() => { setMeetingDetail(item); setNotesText(item.notes || ''); }}>
-                  <Feather name="edit-3" size={14} color={colors.primary} />
-                  <Text style={s.miniBtnText}>Notes</Text>
-                </TouchableOpacity>
-              </>
             )}
-            <TouchableOpacity style={s.miniBtn} onPress={() => handleDeleteMeeting(item.id)}>
-              <Feather name="trash-2" size={14} color={colors.error} />
+            {item.status === 'visited' && (
+              <TouchableOpacity style={s.followBtn} onPress={() => handleFollowUp(item)}>
+                <Feather name="mail" size={14} color={C.purple} /><Text style={[s.followText]}>Follow-up Notes</Text>
+              </TouchableOpacity>
+            )}
+            {item.status === 'followed_up' && (
+              <View style={s.completeBadge}><Feather name="check-circle" size={14} color={C.success} /><Text style={s.completeText}>Completed</Text></View>
+            )}
+            <TouchableOpacity style={s.delBtn} onPress={() => handleDelete(item.id)}>
+              <Feather name="trash-2" size={14} color={C.err} />
             </TouchableOpacity>
           </View>
-
-          {item.visiting_card_base64 && (
-            <View style={s.attachIndicator}>
-              <Feather name="image" size={12} color={colors.success} />
-              <Text style={s.attachText}>Card attached</Text>
-            </View>
-          )}
         </View>
       </View>
     );
   };
-
-  const expoName = expos.find(e => e.id === selectedExpo)?.name || 'Select Expo';
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <View style={s.header}>
         <View>
           <Text style={s.title}>Expo Day</Text>
-          <Text style={s.subtitle}>Your meeting timeline</Text>
+          <Text style={s.subtitle}>Your meeting agenda</Text>
         </View>
-        {expoDay && meetings.length > 0 && (
+        {days.length > 0 && (
           <TouchableOpacity testID="export-day-btn" style={s.exportBtn} onPress={handleExport}>
-            <Feather name="download" size={16} color={colors.primary} />
-            <Text style={s.exportText}>Export</Text>
+            <Feather name="download" size={14} color={C.blue} /><Text style={s.exportText}>Export</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      <TouchableOpacity testID="expo-day-selector" style={s.selector} onPress={() => setShowExpoModal(true)}>
-        <Feather name="calendar" size={18} color={colors.primary} />
-        <Text style={s.selectorText}>{expoName}</Text>
-        <Feather name="chevron-down" size={18} color={colors.fgMuted} />
-      </TouchableOpacity>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.expoBar} contentContainerStyle={{ paddingHorizontal: 16, gap: 6 }}>
+        <TouchableOpacity style={[s.fChip, !selExpo && s.fChipOn]} onPress={() => setSelExpo('')}>
+          <Text style={[s.fText, !selExpo && s.fTextOn]}>All Expos</Text></TouchableOpacity>
+        {expos.map(e => (
+          <TouchableOpacity key={e.id} style={[s.fChip, selExpo === e.id && s.fChipOn]}
+            onPress={() => setSelExpo(selExpo === e.id ? '' : e.id)}>
+            <Text style={[s.fText, selExpo === e.id && s.fTextOn]}>{e.name?.split(' ').slice(0,2).join(' ')}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
-      {loading ? (
-        <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary} size="large" />
-      ) : !selectedExpo ? (
-        <View style={s.empty}>
-          <Feather name="calendar" size={64} color={colors.bgTertiary} />
-          <Text style={s.emptyTitle}>Select an expo</Text>
-          <Text style={s.emptyDesc}>Choose an expo to view your meeting timeline</Text>
+      {/* Stats */}
+      {days.length > 0 && (
+        <View style={s.stats}>
+          <View style={s.statItem}><Text style={s.statNum}>{days.length}</Text><Text style={s.statLabel}>Total</Text></View>
+          <View style={s.statItem}><Text style={[s.statNum, { color: C.blue }]}>{days.filter(d => d.status === 'planned').length}</Text><Text style={s.statLabel}>Planned</Text></View>
+          <View style={s.statItem}><Text style={[s.statNum, { color: C.success }]}>{days.filter(d => d.status === 'visited').length}</Text><Text style={s.statLabel}>Visited</Text></View>
+          <View style={s.statItem}><Text style={[s.statNum, { color: C.purple }]}>{days.filter(d => d.status === 'followed_up').length}</Text><Text style={s.statLabel}>Followed Up</Text></View>
         </View>
-      ) : sorted.length === 0 ? (
-        <View style={s.empty}>
-          <Feather name="clock" size={64} color={colors.bgTertiary} />
-          <Text style={s.emptyTitle}>No meetings yet</Text>
-          <Text style={s.emptyDesc}>Add meetings from exhibitor profiles</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={sorted}
-          keyExtractor={item => item.id}
-          renderItem={renderMeeting}
-          contentContainerStyle={s.listContent}
-          showsVerticalScrollIndicator={false}
-        />
       )}
 
-      {/* Notes Modal */}
-      <Modal visible={!!meetingDetail} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Meeting Notes</Text>
-              <TouchableOpacity onPress={() => setMeetingDetail(null)}><Feather name="x" size={24} color={colors.fg} /></TouchableOpacity>
-            </View>
-            <TextInput testID="meeting-notes-input" style={s.notesInput} value={notesText} onChangeText={setNotesText} placeholder="Type your notes..." placeholderTextColor={colors.fgMuted} multiline textAlignVertical="top" />
-            <TouchableOpacity testID="save-notes-btn" style={s.saveBtn} onPress={handleSaveNotes}>
-              <Text style={s.saveBtnText}>Save Notes</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {loading ? <ActivityIndicator style={{ marginTop: 40 }} color={C.blue} size="large" /> : (
+        <FlatList data={days} keyExtractor={i => i.id} renderItem={renderDay}
+          contentContainerStyle={s.list} showsVerticalScrollIndicator={false}
+          ListEmptyComponent={<View style={s.empty}><Feather name="calendar" size={48} color={C.card2} /><Text style={s.emptyTitle}>No meetings scheduled</Text><Text style={s.emptyDesc}>Schedule meetings from Networks tab</Text></View>} />
+      )}
 
-      {/* Expo Selection Modal */}
-      <Modal visible={showExpoModal} transparent animationType="slide">
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Select Expo</Text>
-              <TouchableOpacity onPress={() => setShowExpoModal(false)}><Feather name="x" size={24} color={colors.fg} /></TouchableOpacity>
-            </View>
-            {expos.map(expo => (
-              <TouchableOpacity key={expo.id} style={[s.expoItem, selectedExpo === expo.id && s.expoItemActive]} onPress={() => selectExpo(expo.id)}>
-                <Text style={s.expoItemName}>{expo.name}</Text>
-                <Text style={s.expoItemMeta}>{expo.date} - {expo.location}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
+      {/* Follow-up Notes Modal */}
+      <Modal visible={!!notesModal} transparent animationType="slide">
+        <View style={s.modalBg}><View style={s.modalBox}>
+          <View style={s.modalHead}><Text style={s.modalTitle}>Follow-up Notes</Text><TouchableOpacity onPress={() => setNotesModal(null)}><Feather name="x" size={22} color={C.fg} /></TouchableOpacity></View>
+          <TextInput testID="followup-notes-input" style={s.notesInput} value={notesText} onChangeText={setNotesText} placeholder="Add follow-up notes, action items..." placeholderTextColor={C.dim} multiline textAlignVertical="top" />
+          <TouchableOpacity testID="save-followup-btn" style={s.saveBtn} onPress={saveFollowUp}><Text style={s.saveBtnText}>Save & Mark Followed Up</Text></TouchableOpacity>
+        </View></View>
       </Modal>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  title: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.fg },
-  subtitle: { fontSize: fontSize.sm, color: colors.fgMuted, marginTop: 2 },
-  exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: layout.buttonRadius, borderWidth: 1, borderColor: colors.border },
-  exportText: { color: colors.primary, fontSize: fontSize.sm, fontWeight: '600' },
-  selector: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgSecondary, marginHorizontal: spacing.lg, borderRadius: layout.cardRadius, padding: spacing.md, borderWidth: 1, borderColor: colors.border, marginBottom: spacing.md },
-  selectorText: { flex: 1, color: colors.fg, fontSize: fontSize.base, fontWeight: '600', marginLeft: spacing.sm },
-  listContent: { paddingHorizontal: spacing.lg, paddingBottom: 100 },
+  safe: { flex: 1, backgroundColor: C.bg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 12 },
+  title: { fontSize: 22, fontWeight: '700', color: C.fg, letterSpacing: -0.5 },
+  subtitle: { fontSize: 13, color: C.muted, marginTop: 2 },
+  exportBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: C.border },
+  exportText: { color: C.blue, fontSize: 13, fontWeight: '600' },
+  expoBar: { maxHeight: 40, marginBottom: 8 },
+  fChip: { backgroundColor: C.card, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: C.border },
+  fChipOn: { backgroundColor: C.blueDim, borderColor: C.blue + '44' },
+  fText: { color: C.dim, fontSize: 12, fontWeight: '500' },
+  fTextOn: { color: C.blue },
+  stats: { flexDirection: 'row', marginHorizontal: 16, backgroundColor: C.card, borderRadius: 8, borderWidth: 1, borderColor: C.border, padding: 12, marginBottom: 12 },
+  statItem: { flex: 1, alignItems: 'center' },
+  statNum: { color: C.fg, fontSize: 20, fontWeight: '700' },
+  statLabel: { color: C.dim, fontSize: 10, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  list: { paddingHorizontal: 16, paddingBottom: 100 },
   timelineRow: { flexDirection: 'row', marginBottom: 0 },
-  timelineLeft: { width: 28, alignItems: 'center' },
-  lineTop: { width: 2, flex: 1, backgroundColor: colors.bgTertiary },
-  lineBottom: { width: 2, flex: 1, backgroundColor: colors.bgTertiary },
-  dot: { width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: colors.bg },
-  meetingCard: { flex: 1, backgroundColor: colors.bgSecondary, borderRadius: layout.cardRadius, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, marginLeft: spacing.sm, marginBottom: spacing.md },
-  meetingCheckedIn: { borderColor: colors.success + '44' },
-  meetingHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
-  timeBox: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  timeText: { color: colors.fgMuted, fontSize: fontSize.xs, fontWeight: '600' },
-  statusBadge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: 4 },
-  statusText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-  meetingCompany: { color: colors.fg, fontSize: fontSize.base, fontWeight: '700', marginBottom: 4 },
-  meetingMeta: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.sm },
-  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  metaText: { color: colors.fgMuted, fontSize: fontSize.xs },
-  agendaText: { color: colors.fgMuted, fontSize: fontSize.sm, marginBottom: spacing.sm, fontStyle: 'italic' },
-  notesPreview: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: spacing.sm, backgroundColor: colors.bg, borderRadius: 4, padding: spacing.sm },
-  notesPreviewText: { color: colors.fgMuted, fontSize: fontSize.xs, flex: 1 },
-  meetingActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  checkinBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.success, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: layout.buttonRadius },
-  checkinText: { color: '#fff', fontSize: fontSize.xs, fontWeight: '700' },
-  miniBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: layout.buttonRadius, borderWidth: 1, borderColor: colors.border },
-  miniBtnText: { color: colors.primary, fontSize: fontSize.xs, fontWeight: '600' },
-  attachIndicator: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.sm },
-  attachText: { color: colors.success, fontSize: 10, fontWeight: '600' },
-  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 80 },
-  emptyTitle: { color: colors.fg, fontSize: fontSize.lg, fontWeight: '600', marginTop: spacing.lg },
-  emptyDesc: { color: colors.fgMuted, fontSize: fontSize.sm, marginTop: spacing.sm, textAlign: 'center' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: colors.bgSecondary, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.xxl },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xl },
-  modalTitle: { color: colors.fg, fontSize: fontSize.xl, fontWeight: '700' },
-  notesInput: { backgroundColor: colors.bg, borderRadius: layout.buttonRadius, padding: spacing.md, height: 150, color: colors.fg, fontSize: fontSize.base, borderWidth: 1, borderColor: colors.border, marginBottom: spacing.lg },
-  saveBtn: { backgroundColor: colors.primary, borderRadius: layout.buttonRadius, height: 48, justifyContent: 'center', alignItems: 'center' },
-  saveBtnText: { color: '#fff', fontSize: fontSize.base, fontWeight: '600' },
-  expoItem: { paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
-  expoItemActive: { backgroundColor: colors.badgeBg, marginHorizontal: -spacing.md, paddingHorizontal: spacing.md, borderRadius: layout.buttonRadius },
-  expoItemName: { color: colors.fg, fontSize: fontSize.base, fontWeight: '600' },
-  expoItemMeta: { color: colors.fgMuted, fontSize: fontSize.xs, marginTop: 2 },
+  timeCol: { width: 70, alignItems: 'center', paddingTop: 14 },
+  timeText: { color: C.muted, fontSize: 12, fontWeight: '600', marginBottom: 6 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  line: { width: 2, flex: 1, backgroundColor: C.card2, marginTop: 4 },
+  meetingCard: { flex: 1, backgroundColor: C.card, borderRadius: 8, borderWidth: 1, borderColor: C.border, padding: 14, marginBottom: 8, marginLeft: 8 },
+  meetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  meetInfo: { flex: 1 },
+  coName: { color: C.fg, fontSize: 15, fontWeight: '700' },
+  meetMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  boothText: { color: C.dim, fontSize: 12 },
+  mtBadge: { backgroundColor: C.card2, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
+  mtText: { color: C.dim, fontSize: 10 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  statusText: { fontSize: 11, fontWeight: '600' },
+  notesBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8, backgroundColor: C.bg, borderRadius: 4, padding: 8 },
+  notesText: { color: C.dim, fontSize: 12, flex: 1 },
+  meetActions: { flexDirection: 'row', gap: 8, marginTop: 10, alignItems: 'center' },
+  checkinBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.success, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6 },
+  checkinText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  followBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.purple + '22', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6 },
+  followText: { color: C.purple, fontSize: 13, fontWeight: '600' },
+  completeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  completeText: { color: C.success, fontSize: 12, fontWeight: '500' },
+  delBtn: { marginLeft: 'auto', padding: 4 },
+  empty: { alignItems: 'center', paddingTop: 80 },
+  emptyTitle: { color: C.fg, fontSize: 16, fontWeight: '600', marginTop: 16 },
+  emptyDesc: { color: C.dim, fontSize: 13, marginTop: 4 },
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  modalBox: { backgroundColor: C.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24 },
+  modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalTitle: { color: C.fg, fontSize: 18, fontWeight: '700' },
+  notesInput: { backgroundColor: C.bg, borderRadius: 8, padding: 12, height: 150, color: C.fg, borderWidth: 1, borderColor: C.border, fontSize: 14 },
+  saveBtn: { backgroundColor: C.blue, borderRadius: 8, height: 44, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
+  saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });
