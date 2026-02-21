@@ -1,45 +1,54 @@
-# Expo Intelligence App - PRD
+# ExpoIntel - B2B Expo Prospecting Dashboard
 
 ## Overview
-Expo Intelligence is a B2B mobile app for sales reps attending trade shows/expos. It helps manage exhibitor data, create shortlists, schedule meetings, and track expo day activities.
+ExpoIntel is a professional B2B expo prospecting mobile app for sales teams targeting exhibitors at trade shows. Dark slate/blue theme, production-ready.
 
 ## Tech Stack
-- **Frontend**: Expo React Native (SDK 54) with expo-router
-- **Backend**: FastAPI + MongoDB (Motor async driver)
+- **Frontend**: Expo React Native (SDK 54) with expo-router, 5-tab navigation
+- **Backend**: FastAPI + MongoDB
 - **Auth**: JWT email/password
-- **AI (Low Priority)**: OpenAI Whisper (voice transcription) + GPT-4o (action items) via Emergent LLM Key
+
+## Data Model
+- **users**: id, email, password_hash, name, role
+- **expos**: id, name, region, industry, date
+- **companies**: id, expo_id, name, hq, revenue, booth, industry, shortlist_stage, contacts[]
+- **shortlists**: id, user_id, company_id, expo_id, notes
+- **networks**: id, user_id, company_id, expo_id, contact_name, contact_role, status, meeting_type, scheduled_time, notes
+- **expo_days**: id, user_id, expo_id, company_id, time_slot, status, meeting_type, booth, notes
+
+## Stage Progression
+prospecting → prospecting_complete → engaging → closed_won → closed_lost
+
+## Network Status Flow
+request_sent → meeting_scheduled → expo_day → completed
 
 ## Screens
-1. **Login/Register** - JWT email/password auth with demo credentials
-2. **Home/Browse** - Expo selector, multi-filter exhibitor search (HQ, industry, revenue, solutions), exhibitor cards
-3. **Exhibitor Profile** - Full detail view with About/People tabs, LinkedIn links, Add to Shortlist/Expo Day
-4. **Shortlists** - Create/manage lists, reorder, export CSV, remove items
-5. **Expo Day** - Timeline with meetings, check-in flow, visiting card upload, notes, voice notes, export
-6. **Admin** - CSV upload for expos/exhibitors, user role management
-
-## Data Models
-- **Users**: id, email, password_hash, name, role
-- **Expos**: id, name, date, location
-- **Exhibitors**: id, expo_id, company, hq, industry, revenue, team_size, booth, linkedin, website, solutions[], people[]
-- **Shortlists**: id, user_id, expo_id, name, exhibitor_ids[]
-- **ExpoDays**: id, user_id, expo_id, meetings[{id, exhibitor_id, time, agenda, status, notes, visiting_card_base64, voice_note_base64, voice_transcript, action_items}]
+1. **Home**: Expo cards grid, region/industry filters, company counts
+2. **Expo Detail**: Company table with filters, shortlist buttons
+3. **Shortlists**: 5-stage tab system (Prospecting | Complete | Engaging | Won | Lost)
+4. **Networks**: Engagement tracking grouped by expo, status filters, scheduling
+5. **Expo Day**: Timeline/agenda with check-in and follow-up flow
+6. **Admin**: CSV upload with expo selector, user management
 
 ## Demo Credentials
 - Admin: admin@expointel.com / admin123
-- User: demo@expointel.com / demo123
+- User (Sarah Mitchell): demo@expointel.com / demo123
 
-## API Endpoints
-All prefixed with `/api`:
+## Seed Data
+5 expos: IFA Berlin, CES Las Vegas, MWC Barcelona, Hannover Messe, GITEX Dubai
+20 companies with real contacts
+
+## API Endpoints (all /api prefixed)
 - Auth: /auth/register, /auth/login, /auth/me
-- Expos: /expos (GET, POST)
-- Exhibitors: /exhibitors (GET+filters), /exhibitors/:id, /exhibitors/filters/options
-- Shortlists: /shortlists (GET, POST), /:id/add, /:id/remove, /:id/reorder, /:id/export, DELETE
-- ExpoDays: /expodays (GET, POST), /:id/meetings (POST), /:id/meetings/:mid (PUT, DELETE), /:mid/checkin, /:mid/upload-card, /:mid/upload-voice, /:id/export
-- Admin: /admin/upload-csv, /admin/users, /admin/users/:id/role
+- Expos: /expos, /expos/:id, /expos/meta/filters
+- Companies: /companies, /companies/:id, /companies/:id/stage, /companies/filters/options
+- Shortlists: /shortlists, /shortlists/:id (PUT/DELETE)
+- Networks: /networks, /networks/:id (PUT/DELETE)
+- Expo Days: /expo-days, /expo-days/:id (PUT/DELETE)
+- Admin: /admin/upload-csv, /admin/users
+- Export: /export/shortlists, /export/networks, /export/expo-days
 - Utility: /seed, /health
 
-## Status
-- MVP Complete - All 5 screens functional
-- Backend: 25/25 tests passing
-- Frontend: All screens working
-- AI Features: Placeholder ready (Whisper + GPT-4o integration code present, low priority)
+## Test Results
+- Backend: 22/22 passing (100%)
+- Frontend: All screens functional, all tabs working
