@@ -8,15 +8,15 @@ async function getToken(): Promise<string | null> {
 
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await getToken();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return headers;
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  return h;
 }
 
-async function request(path: string, options: RequestInit = {}) {
+async function request(path: string, opts: RequestInit = {}) {
   const url = `${API_BASE}/api${path}`;
   const headers = await authHeaders();
-  const res = await fetch(url, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+  const res = await fetch(url, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }));
     throw new Error(err.detail || `HTTP ${res.status}`);
@@ -27,9 +27,9 @@ async function request(path: string, options: RequestInit = {}) {
 async function formRequest(path: string, body: FormData) {
   const url = `${API_BASE}/api${path}`;
   const token = await getToken();
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(url, { method: 'POST', headers, body });
+  const h: Record<string, string> = {};
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(url, { method: 'POST', headers: h, body });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }));
     throw new Error(err.detail || `HTTP ${res.status}`);
@@ -37,8 +37,21 @@ async function formRequest(path: string, body: FormData) {
   return res.json();
 }
 
-// Auth
+async function formPut(path: string, body: FormData) {
+  const url = `${API_BASE}/api${path}`;
+  const token = await getToken();
+  const h: Record<string, string> = {};
+  if (token) h['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(url, { method: 'PUT', headers: h, body });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export const api = {
+  // Auth
   register: (email: string, password: string, name: string) =>
     request('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, name }) }),
   login: (email: string, password: string) =>
@@ -46,67 +59,74 @@ export const api = {
   getMe: () => request('/auth/me'),
 
   // Expos
-  getExpos: () => request('/expos'),
-  createExpo: (data: any) => request('/expos', { method: 'POST', body: JSON.stringify(data) }),
-
-  // Exhibitors
-  getExhibitors: (params: Record<string, string> = {}) => {
+  getExpos: (params: Record<string, string> = {}) => {
     const qs = new URLSearchParams(params).toString();
-    return request(`/exhibitors${qs ? `?${qs}` : ''}`);
+    return request(`/expos${qs ? `?${qs}` : ''}`);
   },
-  getExhibitor: (id: string) => request(`/exhibitors/${id}`),
-  getFilterOptions: (expoId?: string) => request(`/exhibitors/filters/options${expoId ? `?expo_id=${expoId}` : ''}`),
+  getExpo: (id: string) => request(`/expos/${id}`),
+  getExpoFilters: () => request('/expos/meta/filters'),
+
+  // Companies
+  getCompanies: (params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/companies${qs ? `?${qs}` : ''}`);
+  },
+  getCompany: (id: string) => request(`/companies/${id}`),
+  updateStage: (cid: string, stage: string) => {
+    const fd = new FormData(); fd.append('stage', stage);
+    return formPut(`/companies/${cid}/stage`, fd);
+  },
+  getCompanyFilters: (expoId?: string) => request(`/companies/filters/options${expoId ? `?expo_id=${expoId}` : ''}`),
 
   // Shortlists
-  getShortlists: () => request('/shortlists'),
-  createShortlist: (expo_id: string, name: string) =>
-    request('/shortlists', { method: 'POST', body: JSON.stringify({ expo_id, name }) }),
-  addToShortlist: (slId: string, exhibitorId: string) =>
-    request(`/shortlists/${slId}/add`, { method: 'POST', body: JSON.stringify({ exhibitor_id: exhibitorId }) }),
-  removeFromShortlist: (slId: string, exhibitorId: string) =>
-    request(`/shortlists/${slId}/remove`, { method: 'POST', body: JSON.stringify({ exhibitor_id: exhibitorId }) }),
-  reorderShortlist: (slId: string, ids: string[]) =>
-    request(`/shortlists/${slId}/reorder`, { method: 'POST', body: JSON.stringify({ exhibitor_ids: ids }) }),
-  deleteShortlist: (slId: string) => request(`/shortlists/${slId}`, { method: 'DELETE' }),
-  exportShortlist: (slId: string) => request(`/shortlists/${slId}/export`),
+  getShortlists: (params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/shortlists${qs ? `?${qs}` : ''}`);
+  },
+  addToShortlist: (company_id: string, expo_id: string, notes?: string) =>
+    request('/shortlists', { method: 'POST', body: JSON.stringify({ company_id, expo_id, notes: notes || '' }) }),
+  updateShortlist: (sid: string, notes: string) => {
+    const fd = new FormData(); fd.append('notes', notes);
+    return formPut(`/shortlists/${sid}`, fd);
+  },
+  deleteShortlist: (sid: string) => request(`/shortlists/${sid}`, { method: 'DELETE' }),
+
+  // Networks
+  getNetworks: (params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/networks${qs ? `?${qs}` : ''}`);
+  },
+  createNetwork: (data: any) => request('/networks', { method: 'POST', body: JSON.stringify(data) }),
+  updateNetwork: (nid: string, data: Record<string, string>) => {
+    const fd = new FormData();
+    Object.entries(data).forEach(([k, v]) => fd.append(k, v));
+    return formPut(`/networks/${nid}`, fd);
+  },
+  deleteNetwork: (nid: string) => request(`/networks/${nid}`, { method: 'DELETE' }),
 
   // Expo Days
-  getExpoDays: (expoId?: string) => request(`/expodays${expoId ? `?expo_id=${expoId}` : ''}`),
-  createExpoDay: (expo_id: string) =>
-    request('/expodays', { method: 'POST', body: JSON.stringify({ expo_id }) }),
-  addMeeting: (edId: string, data: any) =>
-    request(`/expodays/${edId}/meetings`, { method: 'POST', body: JSON.stringify(data) }),
-  updateMeeting: (edId: string, mId: string, data: any) =>
-    request(`/expodays/${edId}/meetings/${mId}`, { method: 'PUT', body: JSON.stringify(data) }),
-  checkinMeeting: (edId: string, mId: string) =>
-    request(`/expodays/${edId}/meetings/${mId}/checkin`, { method: 'POST' }),
-  deleteMeeting: (edId: string, mId: string) =>
-    request(`/expodays/${edId}/meetings/${mId}`, { method: 'DELETE' }),
-  exportExpoDay: (edId: string) => request(`/expodays/${edId}/export`),
-  uploadVoiceNote: (edId: string, mId: string, base64Data: string) => {
-    const fd = new FormData();
-    fd.append('base64_data', base64Data);
-    return formRequest(`/expodays/${edId}/meetings/${mId}/upload-voice`, fd);
+  getExpoDays: (params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/expo-days${qs ? `?${qs}` : ''}`);
   },
-  uploadVisitingCard: (edId: string, mId: string, base64Data: string) => {
+  createExpoDay: (data: any) => request('/expo-days', { method: 'POST', body: JSON.stringify(data) }),
+  updateExpoDay: (eid: string, data: Record<string, string>) => {
     const fd = new FormData();
-    fd.append('base64_data', base64Data);
-    return formRequest(`/expodays/${edId}/meetings/${mId}/upload-card`, fd);
+    Object.entries(data).forEach(([k, v]) => fd.append(k, v));
+    return formPut(`/expo-days/${eid}`, fd);
   },
+  deleteExpoDay: (eid: string) => request(`/expo-days/${eid}`, { method: 'DELETE' }),
 
   // Admin
-  uploadCSV: (content: string, fileType: string) => {
-    const fd = new FormData();
-    fd.append('file_content', content);
-    fd.append('file_type', fileType);
+  uploadCSV: (content: string, expoId: string) => {
+    const fd = new FormData(); fd.append('file_content', content); fd.append('expo_id', expoId);
     return formRequest('/admin/upload-csv', fd);
   },
   getUsers: () => request('/admin/users'),
-  updateUserRole: (userId: string, role: string) => {
-    const fd = new FormData();
-    fd.append('role', role);
-    return formRequest(`/admin/users/${userId}/role`, fd);
-  },
+
+  // Export
+  exportCSV: (collection: string, expoId?: string) =>
+    request(`/export/${collection}${expoId ? `?expo_id=${expoId}` : ''}`),
 
   // Seed
   seed: () => request('/seed', { method: 'POST' }),
