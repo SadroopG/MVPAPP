@@ -203,20 +203,20 @@ class TestCompanies:
         assert isinstance(data["hqs"], list)
         print(f"✓ Company filter options: {len(data['industries'])} industries, {len(data['hqs'])} HQs")
     
-    def test_update_company_stage(self, api_client, auth_headers):
+    def test_update_company_stage(self, api_client, demo_user_token):
         """Test PUT /api/companies/{id}/stage updates stage"""
         # Get first company
         expos = api_client.get(f"{BASE_URL}/api/expos").json()
         companies = api_client.get(f"{BASE_URL}/api/companies?expo_id={expos[0]['id']}").json()
         company_id = companies[0]["id"]
         
-        # Update stage (endpoint uses Form data, not JSON)
-        # Remove Content-Type header since we're sending form data
-        form_headers = {"Authorization": auth_headers["Authorization"]}
+        # Update stage (endpoint uses Form data - use requests directly to avoid session headers)
+        import requests
+        form_headers = {"Authorization": f"Bearer {demo_user_token}"}
         form_data = {"stage": "prospecting"}
-        response = api_client.put(f"{BASE_URL}/api/companies/{company_id}/stage",
-            headers=form_headers,  # Don't include Content-Type: application/json
-            data=form_data  # Use form data
+        response = requests.put(f"{BASE_URL}/api/companies/{company_id}/stage",
+            headers=form_headers,
+            data=form_data
         )
         assert response.status_code == 200
         data = response.json()
