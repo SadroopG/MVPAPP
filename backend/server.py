@@ -1,22 +1,14 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
-import io
-import csv
-import json
-import base64
+import os, logging, io, csv, json, uuid
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-import uuid
+from typing import List, Optional
 from datetime import datetime, timezone
-import jwt
-import bcrypt
-import pandas as pd
+import jwt, bcrypt
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -24,610 +16,389 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
-
-JWT_SECRET = os.environ.get('JWT_SECRET', 'expo-intel-secret-2026')
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+JWT_SECRET = os.environ.get('JWT_SECRET', 'expointel-secret-key-2026-prod!!')
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ============ MODELS ============
+# ── Auth Helpers ──
+def hash_pw(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+def verify_pw(pw: str, h: str) -> bool:
+    return bcrypt.checkpw(pw.encode(), h.encode())
+def make_token(uid: str, role: str) -> str:
+    return jwt.encode({"user_id": uid, "role": role, "exp": datetime.now(timezone.utc).timestamp() + 86400*7}, JWT_SECRET, algorithm="HS256")
 
-class UserRegister(BaseModel):
-    email: str
-    password: str
-    name: str
-
-class UserLogin(BaseModel):
-    email: str
-    password: str
-
-class ExpoCreate(BaseModel):
-    name: str
-    date: str
-    location: str
-
-class ShortlistCreate(BaseModel):
-    expo_id: str
-    name: str
-
-class AddToShortlist(BaseModel):
-    exhibitor_id: str
-
-class MeetingCreate(BaseModel):
-    exhibitor_id: str
-    time: str
-    agenda: Optional[str] = ""
-
-class MeetingUpdate(BaseModel):
-    time: Optional[str] = None
-    agenda: Optional[str] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
-
-class ExpoDayCreate(BaseModel):
-    expo_id: str
-
-class ReorderRequest(BaseModel):
-    exhibitor_ids: List[str]
-
-# ============ AUTH HELPERS ============
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode(), hashed.encode())
-
-def create_token(user_id: str, role: str) -> str:
-    return jwt.encode({"user_id": user_id, "role": role, "exp": datetime.now(timezone.utc).timestamp() + 86400 * 7}, JWT_SECRET, algorithm="HS256")
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+async def current_user(cred: HTTPAuthorizationCredentials = Depends(security)):
+    if not cred: raise HTTPException(401, "Not authenticated")
     try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
-        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        p = jwt.decode(cred.credentials, JWT_SECRET, algorithms=["HS256"])
+        u = await db.users.find_one({"id": p["user_id"]}, {"_id": 0})
+        if not u: raise HTTPException(401, "User not found")
+        return u
+    except jwt.ExpiredSignatureError: raise HTTPException(401, "Token expired")
+    except Exception: raise HTTPException(401, "Invalid token")
 
-# ============ AUTH ENDPOINTS ============
+# ── Models ──
+class AuthIn(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
 
+class ShortlistIn(BaseModel):
+    company_id: str
+    expo_id: str
+    notes: Optional[str] = ""
+
+class NetworkIn(BaseModel):
+    company_id: str
+    expo_id: str
+    contact_name: str
+    contact_role: Optional[str] = ""
+    status: Optional[str] = "request_sent"
+    meeting_type: Optional[str] = "booth_visit"
+    scheduled_time: Optional[str] = ""
+    notes: Optional[str] = ""
+
+class ExpoDayIn(BaseModel):
+    expo_id: str
+    company_id: str
+    time_slot: str
+    meeting_type: Optional[str] = "booth_visit"
+    booth: Optional[str] = ""
+    notes: Optional[str] = ""
+
+# ── Auth ──
 @api_router.post("/auth/register")
-async def register(data: UserRegister):
-    existing = await db.users.find_one({"email": data.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user = {
-        "id": str(uuid.uuid4()),
-        "email": data.email,
-        "password_hash": hash_password(data.password),
-        "name": data.name,
-        "role": "user",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.users.insert_one(user)
-    token = create_token(user["id"], user["role"])
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}}
+async def register(data: AuthIn):
+    if await db.users.find_one({"email": data.email}):
+        raise HTTPException(400, "Email already registered")
+    u = {"id": str(uuid.uuid4()), "email": data.email, "password_hash": hash_pw(data.password),
+         "name": data.name or data.email.split("@")[0], "role": "user", "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.users.insert_one(u)
+    return {"token": make_token(u["id"], u["role"]), "user": {"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"]}}
 
 @api_router.post("/auth/login")
-async def login(data: UserLogin):
-    user = await db.users.find_one({"email": data.email}, {"_id": 0})
-    if not user or not verify_password(data.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(user["id"], user["role"])
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}}
+async def login(data: AuthIn):
+    u = await db.users.find_one({"email": data.email}, {"_id": 0})
+    if not u or not verify_pw(data.password, u["password_hash"]):
+        raise HTTPException(401, "Invalid credentials")
+    return {"token": make_token(u["id"], u["role"]), "user": {"id": u["id"], "email": u["email"], "name": u["name"], "role": u["role"]}}
 
 @api_router.get("/auth/me")
-async def get_me(user=Depends(get_current_user)):
+async def get_me(user=Depends(current_user)):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
-# ============ EXPOS ============
-
+# ── Expos ──
 @api_router.get("/expos")
-async def get_expos():
-    expos = await db.expos.find({}, {"_id": 0}).to_list(100)
+async def get_expos(region: Optional[str] = None, industry: Optional[str] = None):
+    q = {}
+    if region: q["region"] = {"$regex": region, "$options": "i"}
+    if industry: q["industry"] = {"$regex": industry, "$options": "i"}
+    expos = await db.expos.find(q, {"_id": 0}).to_list(100)
+    for e in expos:
+        e["company_count"] = await db.companies.count_documents({"expo_id": e["id"]})
     return expos
 
-@api_router.post("/expos")
-async def create_expo(data: ExpoCreate, user=Depends(get_current_user)):
-    expo = {
-        "id": str(uuid.uuid4()),
-        "name": data.name,
-        "date": data.date,
-        "location": data.location,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.expos.insert_one(expo)
-    return {k: v for k, v in expo.items() if k != "_id"}
+@api_router.get("/expos/{eid}")
+async def get_expo(eid: str):
+    e = await db.expos.find_one({"id": eid}, {"_id": 0})
+    if not e: raise HTTPException(404, "Expo not found")
+    e["company_count"] = await db.companies.count_documents({"expo_id": eid})
+    return e
 
-# ============ EXHIBITORS ============
+@api_router.get("/expos/meta/filters")
+async def expo_filters():
+    regions = await db.expos.distinct("region")
+    industries = await db.expos.distinct("industry")
+    return {"regions": sorted([r for r in regions if r]), "industries": sorted([i for i in industries if i])}
 
-@api_router.get("/exhibitors")
-async def get_exhibitors(
-    expo_id: Optional[str] = None,
-    hq: Optional[str] = None,
-    industry: Optional[str] = None,
-    min_revenue: Optional[float] = None,
-    min_team_size: Optional[int] = None,
-    solutions: Optional[str] = None,
-    search: Optional[str] = None
-):
-    query = {}
-    if expo_id:
-        query["expo_id"] = expo_id
-    if hq:
-        query["hq"] = {"$regex": hq, "$options": "i"}
-    if industry:
-        query["industry"] = {"$regex": industry, "$options": "i"}
-    if min_revenue:
-        query["revenue"] = {"$gte": min_revenue}
-    if min_team_size:
-        query["team_size"] = {"$gte": min_team_size}
-    if solutions:
-        sol_list = [s.strip() for s in solutions.split(",")]
-        query["solutions"] = {"$in": sol_list}
-    if search:
-        query["company"] = {"$regex": search, "$options": "i"}
+# ── Companies ──
+@api_router.get("/companies")
+async def get_companies(expo_id: Optional[str] = None, industry: Optional[str] = None,
+                        hq: Optional[str] = None, min_revenue: Optional[float] = None,
+                        max_revenue: Optional[float] = None, search: Optional[str] = None):
+    q = {}
+    if expo_id: q["expo_id"] = expo_id
+    if industry: q["industry"] = {"$regex": industry, "$options": "i"}
+    if hq: q["hq"] = {"$regex": hq, "$options": "i"}
+    if min_revenue is not None or max_revenue is not None:
+        q["revenue"] = {}
+        if min_revenue is not None: q["revenue"]["$gte"] = min_revenue
+        if max_revenue is not None: q["revenue"]["$lte"] = max_revenue
+        if not q["revenue"]: del q["revenue"]
+    if search: q["name"] = {"$regex": search, "$options": "i"}
+    return await db.companies.find(q, {"_id": 0}).to_list(500)
 
-    exhibitors = await db.exhibitors.find(query, {"_id": 0}).to_list(500)
-    return exhibitors
+@api_router.get("/companies/{cid}")
+async def get_company(cid: str):
+    c = await db.companies.find_one({"id": cid}, {"_id": 0})
+    if not c: raise HTTPException(404, "Company not found")
+    return c
 
-@api_router.get("/exhibitors/{exhibitor_id}")
-async def get_exhibitor(exhibitor_id: str):
-    ex = await db.exhibitors.find_one({"id": exhibitor_id}, {"_id": 0})
-    if not ex:
-        raise HTTPException(status_code=404, detail="Exhibitor not found")
-    return ex
+@api_router.put("/companies/{cid}/stage")
+async def update_stage(cid: str, stage: str = Form(...), user=Depends(current_user)):
+    valid = ["prospecting", "prospecting_complete", "engaging", "closed_won", "closed_lost"]
+    if stage not in valid: raise HTTPException(400, f"Invalid stage. Must be one of: {valid}")
+    await db.companies.update_one({"id": cid}, {"$set": {"shortlist_stage": stage}})
+    return {"status": "updated", "stage": stage}
 
-@api_router.get("/exhibitors/filters/options")
-async def get_filter_options(expo_id: Optional[str] = None):
-    query = {}
-    if expo_id:
-        query["expo_id"] = expo_id
-    pipeline = [
-        {"$match": query},
-        {"$group": {
-            "_id": None,
-            "hqs": {"$addToSet": "$hq"},
-            "industries": {"$addToSet": "$industry"},
-            "solutions": {"$push": "$solutions"}
-        }}
-    ]
-    result = await db.exhibitors.aggregate(pipeline).to_list(1)
-    if not result:
-        return {"hqs": [], "industries": [], "solutions": []}
-    r = result[0]
-    all_solutions = set()
-    for sol_list in r.get("solutions", []):
-        if isinstance(sol_list, list):
-            all_solutions.update(sol_list)
-    return {
-        "hqs": sorted([x for x in r.get("hqs", []) if x]),
-        "industries": sorted([x for x in r.get("industries", []) if x]),
-        "solutions": sorted(list(all_solutions))
-    }
+@api_router.get("/companies/filters/options")
+async def company_filter_options(expo_id: Optional[str] = None):
+    q = {"expo_id": expo_id} if expo_id else {}
+    pipeline = [{"$match": q}, {"$group": {"_id": None,
+        "industries": {"$addToSet": "$industry"}, "hqs": {"$addToSet": "$hq"},
+        "min_revenue": {"$min": "$revenue"}, "max_revenue": {"$max": "$revenue"}}}]
+    r = await db.companies.aggregate(pipeline).to_list(1)
+    if not r: return {"industries": [], "hqs": [], "min_revenue": 0, "max_revenue": 1000}
+    return {"industries": sorted([x for x in r[0].get("industries",[]) if x]),
+            "hqs": sorted([x for x in r[0].get("hqs",[]) if x]),
+            "min_revenue": r[0].get("min_revenue", 0), "max_revenue": r[0].get("max_revenue", 1000)}
 
-# ============ SHORTLISTS ============
-
+# ── Shortlists ──
 @api_router.get("/shortlists")
-async def get_shortlists(user=Depends(get_current_user)):
-    shortlists = await db.shortlists.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
-    for sl in shortlists:
-        if sl.get("exhibitor_ids"):
-            exhibitors = await db.exhibitors.find({"id": {"$in": sl["exhibitor_ids"]}}, {"_id": 0}).to_list(100)
-            sl["exhibitors"] = exhibitors
-        else:
-            sl["exhibitors"] = []
-    return shortlists
+async def get_shortlists(stage: Optional[str] = None, expo_id: Optional[str] = None, user=Depends(current_user)):
+    q = {"user_id": user["id"]}
+    if expo_id: q["expo_id"] = expo_id
+    sls = await db.shortlists.find(q, {"_id": 0}).to_list(500)
+    for sl in sls:
+        c = await db.companies.find_one({"id": sl["company_id"]}, {"_id": 0})
+        if c:
+            sl["company"] = c
+            if stage and c.get("shortlist_stage") != stage: continue
+        e = await db.expos.find_one({"id": sl["expo_id"]}, {"_id": 0})
+        if e: sl["expo"] = e
+    if stage:
+        sls = [s for s in sls if s.get("company", {}).get("shortlist_stage") == stage]
+    return sls
 
 @api_router.post("/shortlists")
-async def create_shortlist(data: ShortlistCreate, user=Depends(get_current_user)):
-    shortlist = {
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "expo_id": data.expo_id,
-        "name": data.name,
-        "exhibitor_ids": [],
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.shortlists.insert_one(shortlist)
-    return {k: v for k, v in shortlist.items() if k != "_id"}
+async def create_shortlist(data: ShortlistIn, user=Depends(current_user)):
+    existing = await db.shortlists.find_one({"user_id": user["id"], "company_id": data.company_id, "expo_id": data.expo_id})
+    if existing: return {"status": "already_exists", "id": existing.get("id", "")}
+    sl = {"id": str(uuid.uuid4()), "user_id": user["id"], "company_id": data.company_id,
+          "expo_id": data.expo_id, "notes": data.notes or "", "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.shortlists.insert_one(sl)
+    await db.companies.update_one({"id": data.company_id, "shortlist_stage": {"$in": [None, "", "none"]}},
+                                   {"$set": {"shortlist_stage": "prospecting"}})
+    return {k: v for k, v in sl.items() if k != "_id"}
 
-@api_router.post("/shortlists/{shortlist_id}/add")
-async def add_to_shortlist(shortlist_id: str, data: AddToShortlist, user=Depends(get_current_user)):
-    result = await db.shortlists.update_one(
-        {"id": shortlist_id, "user_id": user["id"]},
-        {"$addToSet": {"exhibitor_ids": data.exhibitor_id}}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Shortlist not found")
-    return {"status": "added"}
-
-@api_router.post("/shortlists/{shortlist_id}/remove")
-async def remove_from_shortlist(shortlist_id: str, data: AddToShortlist, user=Depends(get_current_user)):
-    await db.shortlists.update_one(
-        {"id": shortlist_id, "user_id": user["id"]},
-        {"$pull": {"exhibitor_ids": data.exhibitor_id}}
-    )
-    return {"status": "removed"}
-
-@api_router.post("/shortlists/{shortlist_id}/reorder")
-async def reorder_shortlist(shortlist_id: str, data: ReorderRequest, user=Depends(get_current_user)):
-    await db.shortlists.update_one(
-        {"id": shortlist_id, "user_id": user["id"]},
-        {"$set": {"exhibitor_ids": data.exhibitor_ids}}
-    )
-    return {"status": "reordered"}
-
-@api_router.delete("/shortlists/{shortlist_id}")
-async def delete_shortlist(shortlist_id: str, user=Depends(get_current_user)):
-    await db.shortlists.delete_one({"id": shortlist_id, "user_id": user["id"]})
-    return {"status": "deleted"}
-
-@api_router.get("/shortlists/{shortlist_id}/export")
-async def export_shortlist(shortlist_id: str, user=Depends(get_current_user)):
-    sl = await db.shortlists.find_one({"id": shortlist_id, "user_id": user["id"]}, {"_id": 0})
-    if not sl:
-        raise HTTPException(status_code=404, detail="Shortlist not found")
-    exhibitors = await db.exhibitors.find({"id": {"$in": sl.get("exhibitor_ids", [])}}, {"_id": 0}).to_list(100)
-    rows = []
-    for ex in exhibitors:
-        rows.append({
-            "Company": ex.get("company", ""),
-            "HQ": ex.get("hq", ""),
-            "Industry": ex.get("industry", ""),
-            "Revenue": ex.get("revenue", ""),
-            "Team Size": ex.get("team_size", ""),
-            "Booth": ex.get("booth", ""),
-            "Website": ex.get("website", ""),
-            "LinkedIn": ex.get("linkedin", "")
-        })
-    output = io.StringIO()
-    if rows:
-        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
-    return {"csv_data": output.getvalue(), "filename": f"shortlist_{sl.get('name', 'export')}.csv"}
-
-# ============ EXPO DAYS ============
-
-@api_router.get("/expodays")
-async def get_expodays(expo_id: Optional[str] = None, user=Depends(get_current_user)):
-    query = {"user_id": user["id"]}
-    if expo_id:
-        query["expo_id"] = expo_id
-    expodays = await db.expodays.find(query, {"_id": 0}).to_list(100)
-    for ed in expodays:
-        for meeting in ed.get("meetings", []):
-            ex = await db.exhibitors.find_one({"id": meeting.get("exhibitor_id")}, {"_id": 0})
-            if ex:
-                meeting["exhibitor"] = ex
-    return expodays
-
-@api_router.post("/expodays")
-async def create_expoday(data: ExpoDayCreate, user=Depends(get_current_user)):
-    existing = await db.expodays.find_one({"user_id": user["id"], "expo_id": data.expo_id}, {"_id": 0})
-    if existing:
-        return {k: v for k, v in existing.items() if k != "_id"}
-    expoday = {
-        "id": str(uuid.uuid4()),
-        "user_id": user["id"],
-        "expo_id": data.expo_id,
-        "meetings": [],
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.expodays.insert_one(expoday)
-    return {k: v for k, v in expoday.items() if k != "_id"}
-
-@api_router.post("/expodays/{expoday_id}/meetings")
-async def add_meeting(expoday_id: str, data: MeetingCreate, user=Depends(get_current_user)):
-    meeting = {
-        "id": str(uuid.uuid4()),
-        "exhibitor_id": data.exhibitor_id,
-        "time": data.time,
-        "agenda": data.agenda or "",
-        "status": "scheduled",
-        "notes": "",
-        "visiting_card_base64": None,
-        "voice_note_base64": None,
-        "voice_transcript": None,
-        "action_items": None,
-        "checked_in": False
-    }
-    result = await db.expodays.update_one(
-        {"id": expoday_id, "user_id": user["id"]},
-        {"$push": {"meetings": meeting}}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Expo day not found")
-    return meeting
-
-@api_router.put("/expodays/{expoday_id}/meetings/{meeting_id}")
-async def update_meeting(expoday_id: str, meeting_id: str, data: MeetingUpdate, user=Depends(get_current_user)):
-    update_fields = {}
-    if data.time is not None:
-        update_fields["meetings.$.time"] = data.time
-    if data.agenda is not None:
-        update_fields["meetings.$.agenda"] = data.agenda
-    if data.status is not None:
-        update_fields["meetings.$.status"] = data.status
-    if data.notes is not None:
-        update_fields["meetings.$.notes"] = data.notes
-    if update_fields:
-        await db.expodays.update_one(
-            {"id": expoday_id, "user_id": user["id"], "meetings.id": meeting_id},
-            {"$set": update_fields}
-        )
+@api_router.put("/shortlists/{sid}")
+async def update_shortlist(sid: str, notes: str = Form(""), user=Depends(current_user)):
+    await db.shortlists.update_one({"id": sid, "user_id": user["id"]}, {"$set": {"notes": notes}})
     return {"status": "updated"}
 
-@api_router.post("/expodays/{expoday_id}/meetings/{meeting_id}/checkin")
-async def checkin_meeting(expoday_id: str, meeting_id: str, user=Depends(get_current_user)):
-    await db.expodays.update_one(
-        {"id": expoday_id, "user_id": user["id"], "meetings.id": meeting_id},
-        {"$set": {"meetings.$.checked_in": True, "meetings.$.status": "checked_in"}}
-    )
-    return {"status": "checked_in"}
-
-@api_router.post("/expodays/{expoday_id}/meetings/{meeting_id}/upload-card")
-async def upload_visiting_card(expoday_id: str, meeting_id: str, base64_data: str = Form(...), user=Depends(get_current_user)):
-    await db.expodays.update_one(
-        {"id": expoday_id, "user_id": user["id"], "meetings.id": meeting_id},
-        {"$set": {"meetings.$.visiting_card_base64": base64_data}}
-    )
-    return {"status": "card_uploaded"}
-
-@api_router.post("/expodays/{expoday_id}/meetings/{meeting_id}/upload-voice")
-async def upload_voice_note(expoday_id: str, meeting_id: str, base64_data: str = Form(...), user=Depends(get_current_user)):
-    await db.expodays.update_one(
-        {"id": expoday_id, "user_id": user["id"], "meetings.id": meeting_id},
-        {"$set": {"meetings.$.voice_note_base64": base64_data}}
-    )
-    # Attempt transcription
-    transcript = None
-    action_items = None
-    try:
-        from emergentintegrations.llm.openai import OpenAISpeechToText
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        if EMERGENT_LLM_KEY:
-            audio_bytes = base64.b64decode(base64_data)
-            temp_path = f"/tmp/voice_{meeting_id}.wav"
-            with open(temp_path, "wb") as f:
-                f.write(audio_bytes)
-            stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
-            with open(temp_path, "rb") as audio_file:
-                response = await stt.transcribe(file=audio_file, model="whisper-1", response_format="json")
-            transcript = response.text
-            if transcript:
-                chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"actions-{meeting_id}", system_message="Extract action items from meeting notes. Return a concise bullet list.")
-                chat.with_model("openai", "gpt-4o")
-                msg = UserMessage(text=f"Extract action items from this meeting transcript:\n\n{transcript}")
-                action_items = await chat.send_message(msg)
-            await db.expodays.update_one(
-                {"id": expoday_id, "user_id": user["id"], "meetings.id": meeting_id},
-                {"$set": {"meetings.$.voice_transcript": transcript, "meetings.$.action_items": action_items}}
-            )
-            os.remove(temp_path)
-    except Exception as e:
-        logger.warning(f"Transcription failed: {e}")
-    return {"status": "voice_uploaded", "transcript": transcript, "action_items": action_items}
-
-@api_router.delete("/expodays/{expoday_id}/meetings/{meeting_id}")
-async def delete_meeting(expoday_id: str, meeting_id: str, user=Depends(get_current_user)):
-    await db.expodays.update_one(
-        {"id": expoday_id, "user_id": user["id"]},
-        {"$pull": {"meetings": {"id": meeting_id}}}
-    )
+@api_router.delete("/shortlists/{sid}")
+async def delete_shortlist(sid: str, user=Depends(current_user)):
+    await db.shortlists.delete_one({"id": sid, "user_id": user["id"]})
     return {"status": "deleted"}
 
-@api_router.get("/expodays/{expoday_id}/export")
-async def export_expoday(expoday_id: str, user=Depends(get_current_user)):
-    ed = await db.expodays.find_one({"id": expoday_id, "user_id": user["id"]}, {"_id": 0})
-    if not ed:
-        raise HTTPException(status_code=404, detail="Expo day not found")
-    rows = []
-    for m in ed.get("meetings", []):
-        ex = await db.exhibitors.find_one({"id": m.get("exhibitor_id")}, {"_id": 0})
-        rows.append({
-            "Time": m.get("time", ""),
-            "Company": ex.get("company", "") if ex else "",
-            "Booth": ex.get("booth", "") if ex else "",
-            "Agenda": m.get("agenda", ""),
-            "Status": m.get("status", ""),
-            "Notes": m.get("notes", ""),
-            "Transcript": m.get("voice_transcript", "") or "",
-            "Action Items": m.get("action_items", "") or "",
-            "Checked In": "Yes" if m.get("checked_in") else "No"
-        })
-    output = io.StringIO()
-    if rows:
-        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
-        writer.writeheader()
-        writer.writerows(rows)
-    return {"csv_data": output.getvalue(), "filename": f"expoday_{expoday_id}.csv"}
+# ── Networks ──
+@api_router.get("/networks")
+async def get_networks(expo_id: Optional[str] = None, status: Optional[str] = None, user=Depends(current_user)):
+    q = {"user_id": user["id"]}
+    if expo_id: q["expo_id"] = expo_id
+    if status: q["status"] = status
+    nets = await db.networks.find(q, {"_id": 0}).to_list(500)
+    for n in nets:
+        c = await db.companies.find_one({"id": n["company_id"]}, {"_id": 0})
+        if c: n["company"] = c
+        e = await db.expos.find_one({"id": n["expo_id"]}, {"_id": 0})
+        if e: n["expo"] = e
+    return nets
 
-# ============ ADMIN - CSV UPLOAD ============
+@api_router.post("/networks")
+async def create_network(data: NetworkIn, user=Depends(current_user)):
+    n = {"id": str(uuid.uuid4()), "user_id": user["id"], "company_id": data.company_id,
+         "expo_id": data.expo_id, "contact_name": data.contact_name, "contact_role": data.contact_role,
+         "status": data.status or "request_sent", "meeting_type": data.meeting_type or "booth_visit",
+         "scheduled_time": data.scheduled_time or "", "notes": data.notes or "",
+         "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.networks.insert_one(n)
+    return {k: v for k, v in n.items() if k != "_id"}
 
+@api_router.put("/networks/{nid}")
+async def update_network(nid: str, status: Optional[str] = Form(None), meeting_type: Optional[str] = Form(None),
+                          scheduled_time: Optional[str] = Form(None), notes: Optional[str] = Form(None),
+                          contact_name: Optional[str] = Form(None), contact_role: Optional[str] = Form(None),
+                          user=Depends(current_user)):
+    updates = {}
+    if status is not None: updates["status"] = status
+    if meeting_type is not None: updates["meeting_type"] = meeting_type
+    if scheduled_time is not None: updates["scheduled_time"] = scheduled_time
+    if notes is not None: updates["notes"] = notes
+    if contact_name is not None: updates["contact_name"] = contact_name
+    if contact_role is not None: updates["contact_role"] = contact_role
+    if updates:
+        await db.networks.update_one({"id": nid, "user_id": user["id"]}, {"$set": updates})
+    return {"status": "updated"}
+
+@api_router.delete("/networks/{nid}")
+async def delete_network(nid: str, user=Depends(current_user)):
+    await db.networks.delete_one({"id": nid, "user_id": user["id"]})
+    return {"status": "deleted"}
+
+# ── Expo Days ──
+@api_router.get("/expo-days")
+async def get_expo_days(expo_id: Optional[str] = None, user=Depends(current_user)):
+    q = {"user_id": user["id"]}
+    if expo_id: q["expo_id"] = expo_id
+    eds = await db.expo_days.find(q, {"_id": 0}).sort("time_slot", 1).to_list(500)
+    for ed in eds:
+        c = await db.companies.find_one({"id": ed["company_id"]}, {"_id": 0})
+        if c: ed["company"] = c
+        e = await db.expos.find_one({"id": ed["expo_id"]}, {"_id": 0})
+        if e: ed["expo"] = e
+    return eds
+
+@api_router.post("/expo-days")
+async def create_expo_day(data: ExpoDayIn, user=Depends(current_user)):
+    ed = {"id": str(uuid.uuid4()), "user_id": user["id"], "expo_id": data.expo_id,
+          "company_id": data.company_id, "time_slot": data.time_slot, "status": "planned",
+          "meeting_type": data.meeting_type or "booth_visit", "booth": data.booth or "",
+          "notes": data.notes or "", "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.expo_days.insert_one(ed)
+    return {k: v for k, v in ed.items() if k != "_id"}
+
+@api_router.put("/expo-days/{eid}")
+async def update_expo_day(eid: str, status: Optional[str] = Form(None), notes: Optional[str] = Form(None), user=Depends(current_user)):
+    updates = {}
+    if status: updates["status"] = status
+    if notes is not None: updates["notes"] = notes
+    if updates:
+        await db.expo_days.update_one({"id": eid, "user_id": user["id"]}, {"$set": updates})
+    return {"status": "updated"}
+
+@api_router.delete("/expo-days/{eid}")
+async def delete_expo_day(eid: str, user=Depends(current_user)):
+    await db.expo_days.delete_one({"id": eid, "user_id": user["id"]})
+    return {"status": "deleted"}
+
+# ── Admin CSV ──
 @api_router.post("/admin/upload-csv")
-async def upload_csv(file_content: str = Form(...), file_type: str = Form(...), user=Depends(get_current_user)):
+async def upload_csv(file_content: str = Form(...), expo_id: str = Form(...), user=Depends(current_user)):
     try:
         reader = csv.DictReader(io.StringIO(file_content))
         rows = list(reader)
-        if not rows:
-            raise HTTPException(status_code=400, detail="Empty CSV")
-
-        if file_type == "expos":
-            docs = []
-            for row in rows:
-                docs.append({
-                    "id": str(uuid.uuid4()),
-                    "name": row.get("name", "").strip(),
-                    "date": row.get("date", "").strip(),
-                    "location": row.get("location", "").strip(),
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
-            if docs:
-                await db.expos.insert_many(docs)
-            return {"status": "uploaded", "count": len(docs), "preview": docs[:5]}
-
-        elif file_type == "exhibitors":
-            docs = []
-            for row in rows:
-                people = []
-                people_raw = row.get("people_json", row.get("people", ""))
-                if people_raw:
-                    try:
-                        people = json.loads(people_raw)
-                    except Exception:
-                        people = []
-                solutions_raw = row.get("solutions", "")
-                solutions = [s.strip() for s in solutions_raw.split(",") if s.strip()] if solutions_raw else []
-                rev_str = row.get("revenue", "0").replace("$", "").replace("M", "000000").replace("B", "000000000").replace(",", "").strip()
-                try:
-                    revenue = float(rev_str)
-                except Exception:
-                    revenue = 0
-                ts_str = row.get("team_size", "0").replace(",", "").strip()
-                try:
-                    team_size = int(ts_str)
-                except Exception:
-                    team_size = 0
-                docs.append({
-                    "id": str(uuid.uuid4()),
-                    "expo_id": row.get("expo_id", "").strip(),
-                    "company": row.get("company", "").strip(),
-                    "hq": row.get("hq", row.get("HQ", "")).strip(),
-                    "industry": row.get("industry", "").strip(),
-                    "revenue": revenue,
-                    "team_size": team_size,
-                    "booth": row.get("booth", "").strip(),
-                    "linkedin": row.get("linkedin", "").strip(),
-                    "website": row.get("website", "").strip(),
-                    "solutions": solutions,
-                    "people": people,
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
-            if docs:
-                await db.exhibitors.insert_many(docs)
-            return {"status": "uploaded", "count": len(docs), "preview": [{k: v for k, v in d.items() if k != "_id"} for d in docs[:5]]}
-        else:
-            raise HTTPException(status_code=400, detail="Invalid file_type. Use 'expos' or 'exhibitors'")
-    except HTTPException:
-        raise
+        if not rows: raise HTTPException(400, "Empty CSV")
+        docs = []
+        for row in rows:
+            contacts = []
+            cj = row.get("contacts", "")
+            if cj:
+                try: contacts = json.loads(cj)
+                except: pass
+            rev_str = row.get("revenue", "0").replace("€", "").replace("$", "").replace("M", "").replace(",", "").strip()
+            try: revenue = float(rev_str)
+            except: revenue = 0
+            docs.append({"id": str(uuid.uuid4()), "expo_id": expo_id, "name": row.get("name", "").strip(),
+                         "hq": row.get("HQ", row.get("hq", "")).strip(), "revenue": revenue,
+                         "booth": row.get("booth", "").strip(), "industry": row.get("industry", "").strip(),
+                         "shortlist_stage": "none", "contacts": contacts,
+                         "created_at": datetime.now(timezone.utc).isoformat()})
+        if docs: await db.companies.insert_many(docs)
+        return {"status": "uploaded", "count": len(docs), "preview": [{k:v for k,v in d.items() if k!="_id"} for d in docs[:3]]}
+    except HTTPException: raise
     except Exception as e:
-        logger.error(f"CSV upload error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 
 @api_router.get("/admin/users")
-async def get_users(user=Depends(get_current_user)):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
-    return users
+async def get_users(user=Depends(current_user)):
+    return await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
 
-@api_router.put("/admin/users/{user_id}/role")
-async def update_user_role(user_id: str, role: str = Form(...), user=Depends(get_current_user)):
-    await db.users.update_one({"id": user_id}, {"$set": {"role": role}})
-    return {"status": "updated"}
+# ── Export CSV ──
+@api_router.get("/export/{collection}")
+async def export_csv(collection: str, expo_id: Optional[str] = None, user=Depends(current_user)):
+    q = {"user_id": user["id"]}
+    if expo_id: q["expo_id"] = expo_id
+    coll_map = {"shortlists": db.shortlists, "networks": db.networks, "expo-days": db.expo_days}
+    if collection not in coll_map: raise HTTPException(400, "Invalid collection")
+    items = await coll_map[collection].find(q, {"_id": 0}).to_list(500)
+    rows = []
+    for item in items:
+        c = await db.companies.find_one({"id": item.get("company_id")}, {"_id": 0})
+        e = await db.expos.find_one({"id": item.get("expo_id")}, {"_id": 0})
+        row = {**{k:v for k,v in item.items() if k not in ["_id","user_id"]},
+               "company_name": c.get("name","") if c else "", "expo_name": e.get("name","") if e else ""}
+        rows.append(row)
+    out = io.StringIO()
+    if rows:
+        w = csv.DictWriter(out, fieldnames=rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+    return {"csv_data": out.getvalue(), "filename": f"{collection}_export.csv"}
 
-# ============ SEED DATA ============
-
+# ── Seed ──
 @api_router.post("/seed")
 async def seed_data():
-    expo_count = await db.expos.count_documents({})
-    if expo_count > 0:
+    if await db.expos.count_documents({}) > 0:
         return {"status": "already_seeded"}
 
-    expo_id = str(uuid.uuid4())
-    expo = {
-        "id": expo_id,
-        "name": "TechConnect 2026",
-        "date": "2026-03-15",
-        "location": "San Francisco, CA",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.expos.insert_one(expo)
-
-    expo2_id = str(uuid.uuid4())
-    expo2 = {
-        "id": expo2_id,
-        "name": "Industry Summit Europe",
-        "date": "2026-05-20",
-        "location": "Berlin, Germany",
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.expos.insert_one(expo2)
-
-    exhibitors = [
-        {"company": "NeuralForge AI", "hq": "San Francisco, CA", "industry": "AI/ML", "revenue": 120000000, "team_size": 450, "booth": "A-101", "linkedin": "https://linkedin.com/company/neuralforge", "website": "https://neuralforge.ai", "solutions": ["NLP", "Computer Vision", "MLOps"], "people": [{"name": "Sarah Chen", "title": "CEO", "linkedin": "https://linkedin.com/in/sarachen"}, {"name": "Klaus Schmidt", "title": "VP Engineering", "linkedin": "https://linkedin.com/in/klausschmidt"}]},
-        {"company": "CloudScale Systems", "hq": "Seattle, WA", "industry": "Cloud Infrastructure", "revenue": 85000000, "team_size": 320, "booth": "B-205", "linkedin": "https://linkedin.com/company/cloudscale", "website": "https://cloudscale.io", "solutions": ["Kubernetes", "Serverless", "Edge Computing"], "people": [{"name": "James Parker", "title": "CTO", "linkedin": "https://linkedin.com/in/jamesparker"}, {"name": "Maria Santos", "title": "VP Sales", "linkedin": "https://linkedin.com/in/mariasantos"}]},
-        {"company": "DataVault Security", "hq": "Austin, TX", "industry": "Cybersecurity", "revenue": 200000000, "team_size": 800, "booth": "C-310", "linkedin": "https://linkedin.com/company/datavault", "website": "https://datavault.sec", "solutions": ["Zero Trust", "SIEM", "Threat Intelligence"], "people": [{"name": "Alex Rivera", "title": "CISO", "linkedin": "https://linkedin.com/in/alexrivera"}, {"name": "Priya Patel", "title": "Head of Product", "linkedin": "https://linkedin.com/in/priyapatel"}]},
-        {"company": "GreenTech Solutions", "hq": "Berlin, Germany", "industry": "CleanTech", "revenue": 45000000, "team_size": 150, "booth": "D-115", "linkedin": "https://linkedin.com/company/greentech", "website": "https://greentech.eu", "solutions": ["Solar Analytics", "Carbon Tracking", "Energy Storage"], "people": [{"name": "Hans Müller", "title": "CEO", "linkedin": "https://linkedin.com/in/hansmuller"}]},
-        {"company": "QuantumBit Labs", "hq": "Boston, MA", "industry": "Quantum Computing", "revenue": 60000000, "team_size": 200, "booth": "A-220", "linkedin": "https://linkedin.com/company/quantumbit", "website": "https://quantumbit.io", "solutions": ["Quantum Simulation", "Optimization", "Cryptography"], "people": [{"name": "Dr. Wei Zhang", "title": "Chief Scientist", "linkedin": "https://linkedin.com/in/weizhang"}, {"name": "Emily Brooks", "title": "VP Business Dev", "linkedin": "https://linkedin.com/in/emilybrooks"}]},
-        {"company": "RoboFlow Industries", "hq": "Tokyo, Japan", "industry": "Robotics", "revenue": 300000000, "team_size": 1200, "booth": "B-400", "linkedin": "https://linkedin.com/company/roboflow", "website": "https://roboflow.jp", "solutions": ["Industrial Automation", "Cobots", "Computer Vision"], "people": [{"name": "Kenji Tanaka", "title": "CEO", "linkedin": "https://linkedin.com/in/kenjitanaka"}, {"name": "Lisa Wang", "title": "VP Engineering", "linkedin": "https://linkedin.com/in/lisawang"}]},
-        {"company": "FinEdge Analytics", "hq": "London, UK", "industry": "FinTech", "revenue": 95000000, "team_size": 380, "booth": "C-150", "linkedin": "https://linkedin.com/company/finedge", "website": "https://finedge.co", "solutions": ["Risk Analytics", "Fraud Detection", "RegTech"], "people": [{"name": "Oliver Hayes", "title": "CTO", "linkedin": "https://linkedin.com/in/oliverhayes"}]},
-        {"company": "MedAI Diagnostics", "hq": "Zurich, Switzerland", "industry": "HealthTech", "revenue": 150000000, "team_size": 520, "booth": "D-300", "linkedin": "https://linkedin.com/company/medai", "website": "https://medai.health", "solutions": ["Medical Imaging", "Drug Discovery", "EHR Analytics"], "people": [{"name": "Dr. Anna Kowalski", "title": "Chief Medical Officer", "linkedin": "https://linkedin.com/in/annakowalski"}, {"name": "Marco Bianchi", "title": "VP Sales EMEA", "linkedin": "https://linkedin.com/in/marcobianchi"}]},
+    expos_data = [
+        {"name": "IFA Berlin 2026", "region": "Europe", "industry": "Consumer Electronics", "date": "2026-09-04"},
+        {"name": "CES Las Vegas 2026", "region": "North America", "industry": "Technology", "date": "2026-01-06"},
+        {"name": "MWC Barcelona 2026", "region": "Europe", "industry": "Telecoms & Mobile", "date": "2026-02-23"},
+        {"name": "Hannover Messe 2026", "region": "Europe", "industry": "Industrial Automation", "date": "2026-04-20"},
+        {"name": "GITEX Dubai 2026", "region": "Middle East", "industry": "Technology", "date": "2026-10-14"},
     ]
+    expo_ids = {}
+    for ed in expos_data:
+        eid = str(uuid.uuid4())
+        expo_ids[ed["name"]] = eid
+        await db.expos.insert_one({**ed, "id": eid, "created_at": datetime.now(timezone.utc).isoformat()})
 
-    for i, ex in enumerate(exhibitors):
-        ex["id"] = str(uuid.uuid4())
-        ex["expo_id"] = expo_id if i < 6 else expo2_id
-        ex["created_at"] = datetime.now(timezone.utc).isoformat()
-    # Add some to both expos
-    exhibitors[6]["expo_id"] = expo_id
-    exhibitors[7]["expo_id"] = expo_id
+    companies_data = [
+        # IFA Berlin
+        {"expo": "IFA Berlin 2026", "name": "Siemens AG", "hq": "Munich, Germany", "revenue": 72000, "booth": "Hall 1 A-101", "industry": "Electronics", "contacts": [{"name": "Klaus Weber", "role": "VP Sales EMEA"}, {"name": "Anna Fischer", "role": "Head of Partnerships"}]},
+        {"expo": "IFA Berlin 2026", "name": "Bosch GmbH", "hq": "Stuttgart, Germany", "revenue": 88000, "booth": "Hall 2 B-205", "industry": "Smart Home", "contacts": [{"name": "Thomas Mueller", "role": "Director IoT"}, {"name": "Lisa Braun", "role": "Sales Manager"}]},
+        {"expo": "IFA Berlin 2026", "name": "Philips NV", "hq": "Amsterdam, Netherlands", "revenue": 18500, "booth": "Hall 3 C-110", "industry": "Health Tech", "contacts": [{"name": "Jan van Berg", "role": "CTO"}, {"name": "Sophie Laurent", "role": "BD Manager"}]},
+        {"expo": "IFA Berlin 2026", "name": "Samsung Electronics", "hq": "Seoul, South Korea", "revenue": 245000, "booth": "Hall 1 A-300", "industry": "Consumer Electronics", "contacts": [{"name": "Min-jun Park", "role": "VP European Ops"}]},
+        {"expo": "IFA Berlin 2026", "name": "LG Electronics", "hq": "Seoul, South Korea", "revenue": 63000, "booth": "Hall 2 D-400", "industry": "Home Appliances", "contacts": [{"name": "Hyun-woo Kim", "role": "Director Strategy"}]},
+        {"expo": "IFA Berlin 2026", "name": "Miele & Cie", "hq": "Guetersloh, Germany", "revenue": 5200, "booth": "Hall 4 E-101", "industry": "Home Appliances", "contacts": [{"name": "Markus Schneider", "role": "Head of Digital"}]},
+        # CES
+        {"expo": "CES Las Vegas 2026", "name": "NVIDIA Corporation", "hq": "Santa Clara, USA", "revenue": 60900, "booth": "Central Hall 1001", "industry": "AI & Semiconductors", "contacts": [{"name": "Sarah Chen", "role": "VP Enterprise"}, {"name": "David Park", "role": "BD Lead"}]},
+        {"expo": "CES Las Vegas 2026", "name": "Tesla Inc", "hq": "Austin, USA", "revenue": 96800, "booth": "West Hall 2200", "industry": "Automotive & Energy", "contacts": [{"name": "James Rodriguez", "role": "VP Partnerships"}]},
+        {"expo": "CES Las Vegas 2026", "name": "Apple Inc", "hq": "Cupertino, USA", "revenue": 383000, "booth": "North Hall 3000", "industry": "Consumer Electronics", "contacts": [{"name": "Emily Watson", "role": "Enterprise Sales Dir"}]},
+        {"expo": "CES Las Vegas 2026", "name": "Qualcomm", "hq": "San Diego, USA", "revenue": 38500, "booth": "Central Hall 1500", "industry": "Semiconductors", "contacts": [{"name": "Michael Torres", "role": "VP IoT Solutions"}]},
+        {"expo": "CES Las Vegas 2026", "name": "Meta Platforms", "hq": "Menlo Park, USA", "revenue": 134900, "booth": "West Hall 2500", "industry": "XR & Metaverse", "contacts": [{"name": "Rachel Kim", "role": "Director Partnerships"}]},
+        # MWC
+        {"expo": "MWC Barcelona 2026", "name": "Ericsson AB", "hq": "Stockholm, Sweden", "revenue": 27200, "booth": "Fira Hall 2 2A10", "industry": "Telecoms Infrastructure", "contacts": [{"name": "Erik Lindberg", "role": "SVP Networks"}]},
+        {"expo": "MWC Barcelona 2026", "name": "Nokia Corporation", "hq": "Espoo, Finland", "revenue": 25400, "booth": "Fira Hall 3 3B20", "industry": "Network Equipment", "contacts": [{"name": "Mikko Virtanen", "role": "VP Cloud"}]},
+        {"expo": "MWC Barcelona 2026", "name": "Huawei Technologies", "hq": "Shenzhen, China", "revenue": 99200, "booth": "Fira Hall 1 1C30", "industry": "Telecoms & ICT", "contacts": [{"name": "Wei Zhang", "role": "Director Enterprise EU"}]},
+        {"expo": "MWC Barcelona 2026", "name": "Deutsche Telekom", "hq": "Bonn, Germany", "revenue": 114200, "booth": "Fira Hall 4 4D10", "industry": "Telecoms Operator", "contacts": [{"name": "Hans Richter", "role": "Head of Innovation"}]},
+        # Hannover Messe
+        {"expo": "Hannover Messe 2026", "name": "ABB Ltd", "hq": "Zurich, Switzerland", "revenue": 32200, "booth": "Hall 11 A01", "industry": "Industrial Automation", "contacts": [{"name": "Stefan Keller", "role": "VP Robotics"}]},
+        {"expo": "Hannover Messe 2026", "name": "KUKA AG", "hq": "Augsburg, Germany", "revenue": 3900, "booth": "Hall 11 B05", "industry": "Robotics", "contacts": [{"name": "Martin Bauer", "role": "CTO"}]},
+        {"expo": "Hannover Messe 2026", "name": "SAP SE", "hq": "Walldorf, Germany", "revenue": 32500, "booth": "Hall 8 C10", "industry": "Enterprise Software", "contacts": [{"name": "Julia Wagner", "role": "VP Manufacturing"}]},
+        # GITEX
+        {"expo": "GITEX Dubai 2026", "name": "Emirates NBD", "hq": "Dubai, UAE", "revenue": 8400, "booth": "Hall A A-200", "industry": "FinTech & Banking", "contacts": [{"name": "Ahmed Al-Rashid", "role": "Head of Digital"}]},
+        {"expo": "GITEX Dubai 2026", "name": "Etisalat (e&)", "hq": "Abu Dhabi, UAE", "revenue": 14300, "booth": "Hall B B-100", "industry": "Telecoms", "contacts": [{"name": "Omar Hassan", "role": "VP Enterprise"}]},
+    ]
+    for cd in companies_data:
+        eid = expo_ids.get(cd["expo"])
+        if not eid: continue
+        await db.companies.insert_one({"id": str(uuid.uuid4()), "expo_id": eid, "name": cd["name"],
+            "hq": cd["hq"], "revenue": cd["revenue"], "booth": cd["booth"], "industry": cd["industry"],
+            "shortlist_stage": "none", "contacts": cd.get("contacts", []),
+            "created_at": datetime.now(timezone.utc).isoformat()})
 
-    await db.exhibitors.insert_many(exhibitors)
+    for email, pw, name, role in [("admin@expointel.com","admin123","Admin User","admin"), ("demo@expointel.com","demo123","Sarah Mitchell","user")]:
+        if not await db.users.find_one({"email": email}):
+            await db.users.insert_one({"id": str(uuid.uuid4()), "email": email, "password_hash": hash_pw(pw),
+                "name": name, "role": role, "created_at": datetime.now(timezone.utc).isoformat()})
 
-    # Create admin user
-    admin_exists = await db.users.find_one({"email": "admin@expointel.com"})
-    if not admin_exists:
-        admin = {
-            "id": str(uuid.uuid4()),
-            "email": "admin@expointel.com",
-            "password_hash": hash_password("admin123"),
-            "name": "Admin User",
-            "role": "admin",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(admin)
+    return {"status": "seeded", "expos": len(expos_data), "companies": len(companies_data)}
 
-    demo_exists = await db.users.find_one({"email": "demo@expointel.com"})
-    if not demo_exists:
-        demo = {
-            "id": str(uuid.uuid4()),
-            "email": "demo@expointel.com",
-            "password_hash": hash_password("demo123"),
-            "name": "Demo User",
-            "role": "user",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(demo)
-
-    return {"status": "seeded", "expos": 2, "exhibitors": len(exhibitors), "users": 2}
-
-# ============ HEALTH ============
 @api_router.get("/health")
 async def health():
     return {"status": "ok"}
 
 app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown():
     client.close()
