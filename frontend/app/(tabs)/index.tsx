@@ -74,7 +74,7 @@ export default function HomeScreen() {
           </View>
           <View style={s.cardFooter}>
             <View style={s.companiesCount}>
-              <Feather name="building" size={13} color={C.blue} />
+              <Feather name="briefcase" size={13} color={C.blue} />
               <Text style={s.companiesText}>{item.company_count || 0} companies</Text>
             </View>
             <Feather name="arrow-right" size={16} color={C.dim} />
