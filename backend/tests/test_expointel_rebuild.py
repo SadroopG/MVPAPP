@@ -211,10 +211,12 @@ class TestCompanies:
         company_id = companies[0]["id"]
         
         # Update stage (endpoint uses Form data, not JSON)
+        # Remove Content-Type header since we're sending form data
+        form_headers = {"Authorization": auth_headers["Authorization"]}
         form_data = {"stage": "prospecting"}
         response = api_client.put(f"{BASE_URL}/api/companies/{company_id}/stage",
-            headers={"Authorization": auth_headers["Authorization"]},
-            data=form_data  # Use form data, not json
+            headers=form_headers,  # Don't include Content-Type: application/json
+            data=form_data  # Use form data
         )
         assert response.status_code == 200
         data = response.json()
